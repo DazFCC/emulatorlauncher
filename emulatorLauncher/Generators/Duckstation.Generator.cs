@@ -176,7 +176,7 @@ namespace EmulatorLauncher
 
             try
             {
-                using (var ini = new IniFile(iniFile, IniOptions.UseSpaces))
+                using (var ini = new IniFile(iniFile, IniOptions.UseSpaces | IniOptions.AllowDuplicateValues))
                 {
                     ini.WriteValue("Main", "SetupWizardIncomplete", "false");
 

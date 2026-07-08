@@ -287,8 +287,20 @@ namespace EmulatorLauncher
             ini.WriteValue(padNumber, "RDown", techPadNumber + GetInputKeyName(ctrl, InputKey.rightanalogdown, tech));
             ini.WriteValue(padNumber, "RLeft", techPadNumber + GetInputKeyName(ctrl, InputKey.rightanalogleft, tech));
 
+            // NeGcon defaults
+            ini.WriteValue(padNumber, "B", techPadNumber + GetInputKeyName(ctrl, InputKey.y, tech));
+            ini.WriteValue(padNumber, "A", techPadNumber + GetInputKeyName(ctrl, InputKey.b, tech));
+            ini.WriteValue(padNumber, "I", techPadNumber + GetInputKeyName(ctrl, InputKey.r2, tech));
+            ini.WriteValue(padNumber, "II", techPadNumber + GetInputKeyName(ctrl, InputKey.l2, tech));
+            ini.WriteValue(padNumber, "L", techPadNumber + GetInputKeyName(ctrl, InputKey.pageup, tech));
+            ini.WriteValue(padNumber, "R", techPadNumber + GetInputKeyName(ctrl, InputKey.pagedown, tech));
+            ini.AppendValue(padNumber, "L", techPadNumber + GetInputKeyName(ctrl, InputKey.x, tech));
+            ini.AppendValue(padNumber, "R", techPadNumber + GetInputKeyName(ctrl, InputKey.a, tech));
+            ini.WriteValue(padNumber, "SteeringRight", techPadNumber + GetInputKeyName(ctrl, InputKey.leftanalogright, tech));
+            ini.WriteValue(padNumber, "SteeringLeft", techPadNumber + GetInputKeyName(ctrl, InputKey.leftanalogleft, tech));
+
             // Rumble only for analog controllers
-            if (controllerType == "AnalogController")
+            if (controllerType == "AnalogController" || controllerType == "NeGconRumble")
             {
                 ini.WriteValue(padNumber, "LargeMotor", techPadNumber + "LargeMotor");
                 ini.WriteValue(padNumber, "SmallMotor", techPadNumber + "SmallMotor");
