@@ -330,8 +330,8 @@ namespace EmulatorLauncher
             {
                 ini.Remove(padNumber, "L2");
                 ini.Remove(padNumber, "R2");
-                ini.WriteValue(padNumber, "LUp", techPadNumber + GetInputKeyName(ctrl, InputKey.r2, tech));
-                ini.WriteValue(padNumber, "LDown", techPadNumber + GetInputKeyName(ctrl, InputKey.l2, tech));
+                ini.WriteValue(padNumber, "RUp", techPadNumber + GetInputKeyName(ctrl, InputKey.r2, tech));
+                ini.WriteValue(padNumber, "RDown", techPadNumber + GetInputKeyName(ctrl, InputKey.l2, tech));
             }
 
             // Write Hotkeys for player 1
