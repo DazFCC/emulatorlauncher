@@ -294,7 +294,8 @@ namespace EmulatorLauncher.Libretro
                 { "x64sdl", "VICE SDL" },
                 { "xrick", "xrick" },
                 { "yabasanshiro", "YabaSanshiro" },
-                { "yabause", "Yabause" }
+                { "yabause", "Yabause" },
+                { "ymir", "Emir" },
             };
 
             if (coreNames.TryGetValue(core, out string ret))
@@ -473,6 +474,7 @@ namespace EmulatorLauncher.Libretro
             Configurex1(retroarchConfig, coreSettings, system, core);
             ConfigureYabause(retroarchConfig, coreSettings, system, core);
             ConfigureYabasanshiro(retroarchConfig, coreSettings, system, core);
+            ConfigureYmir(retroarchConfig, coreSettings, system, core);
 
             if (coreSettings.IsDirty)
                 coreSettings.Save(Path.Combine(RetroarchPath, "retroarch-core-options.cfg"), true);
@@ -1475,6 +1477,7 @@ namespace EmulatorLauncher.Libretro
                 BindBoolFeatureOn(coreSettings, "dolphin_widescreen", "dolphin_widescreen", "disabled", "enabled");
                 BindFeature(coreSettings, "dolphin_ir_modifier", "dolphin_ir_modifier", "None");
                 BindFeature(coreSettings, "dolphin_swing_modifier", "dolphin_swing_modifier", "Disabled");
+                BindFeature(coreSettings, "dolphin_ir_mode", "dolphin_ir_mode", "1");
             }
 
             // Triforce
@@ -2324,8 +2327,8 @@ namespace EmulatorLauncher.Libretro
                 return;
 
             // Controls
-            BindFeature(retroarchConfig, "input_libretro_device_p1", "gearcoleco_controller", "1");
-            BindFeature(retroarchConfig, "input_libretro_device_p2", "gearcoleco_controller", "1");
+            BindFeature(retroarchConfig, "input_libretro_device_p1", "gearsystem_controller", "1");
+            BindFeature(retroarchConfig, "input_libretro_device_p2", "gearsystem_controller", "1");
 
             // Guns
             BindBoolFeature(coreSettings, "gearsystem_lightgun_crosshair", "gearsystem_lightgun_crosshair", "Enabled", "Disabled");
@@ -2473,8 +2476,8 @@ namespace EmulatorLauncher.Libretro
             }
 
             // Controls
-            BindFeature(retroarchConfig, "input_libretro_device_p1", "genesis_plus_gx_controller1", "1");
-            BindFeature(retroarchConfig, "input_libretro_device_p2", "genesis_plus_gx_controller2", "1");
+            BindFeature(retroarchConfig, "input_libretro_device_p1", "genesis_plus_gx_controller", "1");
+            BindFeature(retroarchConfig, "input_libretro_device_p2", "genesis_plus_gx_controller", "1");
 
             BindBoolFeature(coreSettings, "genesis_plus_gx_wide_gun_cursor", "gen_gun_cursor", "enabled", "disabled");
             BindFeature(coreSettings, "genesis_plus_gx_wide_gun_input", "gun_input", "lightgun");
@@ -2669,7 +2672,7 @@ namespace EmulatorLauncher.Libretro
             BindBoolFeature(coreSettings, "kronos_bandingmode", "kronos_bandingmode", "enabled", "disabled");
             BindBoolFeature(coreSettings, "kronos_force_downsampling", "kronos_force_downsampling", "enabled", "disabled");
             BindFeature(coreSettings, "kronos_language_id", "kronos_language_id", "English");
-            BindBoolFeature(coreSettings, "kronos_meshmode", "kronos_meshmode", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "kronos_meshmode", "saturn_meshmode", "enabled", "disabled");
             BindFeature(coreSettings, "kronos_resolution_mode", "kronos_resolution_mode", "original");
             BindFeature(coreSettings, "kronos_videoformattype", "kronos_videoformattype", "auto");
             BindFeatureSlider(coreSettings, "kronos_skipframe", "kronos_skipframe", "0");
@@ -3077,7 +3080,7 @@ namespace EmulatorLauncher.Libretro
             BindBoolFeature(coreSettings, "mame2014_cheats_enable", "mame2014_cheats_enable", "enabled", "disabled");
             BindBoolFeatureOn(coreSettings, "mame2014_mouse_enable", "mame2014_mouse_enable", "enabled", "disabled");
             BindBoolFeature(coreSettings, "mame2014_throttle", "mame2014_throttle", "enabled", "disabled");
-            BindBoolFeature(coreSettings, "mame2016_read_config", "mame2016_read_config", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "mame2014_read_config", "mame2014_read_config", "enabled", "disabled");
         }
 
         private void ConfigureMame2016(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
@@ -3855,7 +3858,7 @@ namespace EmulatorLauncher.Libretro
 
             // Microphone
             BindFeature(coreSettings, "melonds_mic_input", "melonds_mic_input", "blow");
-            BindFeature(coreSettings, "melondsds_touch_mode", "melondsds_touch_mode", "hold");
+            BindFeature(coreSettings, "melonds_mic_input_active", "melonds_mic_input_active", "hold");
         }
 
         private void ConfiguremGBA(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
@@ -5396,7 +5399,7 @@ namespace EmulatorLauncher.Libretro
 
             BindBoolFeature(coreSettings, "virtualjaguar_usefastblitter", "usefastblitter", "enabled", "disabled");
             BindBoolFeature(coreSettings, "virtualjaguar_bios", "bios_vj", "enabled", "disabled");
-            BindBoolFeature(coreSettings, "virtualjaguar_doom_res_hack", "doom_res_hack", "enabled", "disabled");
+            //BindBoolFeature(coreSettings, "virtualjaguar_doom_res_hack", "doom_res_hack", "enabled", "disabled");
             BindBoolFeature(coreSettings, "virtualjaguar_pal", "vj_pal", "enabled", "disabled");
 
             // Controls use core options for pro controller
@@ -5517,6 +5520,40 @@ namespace EmulatorLauncher.Libretro
                     retroarchConfig["input_libretro_device_p" + i] = "1";
                 }
             }
+        }
+
+        private void ConfigureYmir(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
+        {
+            if (core != "ymir")
+                return;
+
+            BindFeature(coreSettings, "ymir_region", "ymir_region", "auto");
+            BindFeature(coreSettings, "ymir_cartridge", "ymir_cartridge", "auto");
+            BindBoolFeature(coreSettings, "ymir_sh2_cache", "ymir_sh2_cache", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "ymir_deinterlace", "ymir_deinterlace", "enabled", "disabled");
+
+            // Controls
+            if (SystemConfig.isOptSet("ymir_controller") && !string.IsNullOrEmpty(SystemConfig["ymir_controller"]))
+            {
+                for (int i = 1; i < 9; i++)
+                {
+                    retroarchConfig["input_libretro_device_p" + i] = SystemConfig["ymir_controller"];
+                }
+            }
+            else
+            {
+                for (int i = 1; i < 9; i++)
+                {
+                    retroarchConfig["input_libretro_device_p" + i] = "1";
+                }
+            }
+
+            // guns
+            string guntype = "4";
+            if (SystemConfig.isOptSet("ymir_guntype") && !string.IsNullOrEmpty(SystemConfig["ymir_guntype"]))
+                guntype = SystemConfig["ymir_guntype"];
+
+            SetupLightGuns(retroarchConfig, guntype, core);
         }
         #endregion
     }
