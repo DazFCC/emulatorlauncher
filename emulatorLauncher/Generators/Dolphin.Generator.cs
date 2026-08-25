@@ -9,7 +9,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Management;
 using System.Net;
+using System.Security.AccessControl;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Windows.Shell;
@@ -26,6 +28,7 @@ namespace EmulatorLauncher
         }
 
         private SaveStatesWatcher _saveStatesWatcher;
+        private static bool? _dolphinBarPresent;
 
         public override void Cleanup()
         {
@@ -48,6 +51,7 @@ namespace EmulatorLauncher
         private bool _runWiiMenu = false;
         private bool _sindenSoft = false;
         private bool _crediar = false;
+        private bool _fullscreen = false;
 
         public override System.Diagnostics.ProcessStartInfo Generate(string system, string emulator, string core, string rom, string playersControllers, ScreenResolution resolution)
         {
@@ -84,6 +88,12 @@ namespace EmulatorLauncher
 
             if ((system == "gamecube" && SystemConfig["ratio"] == "") || SystemConfig["ratio"] == "4/3")
                 _bezelFileInfo = BezelFiles.GetBezelFiles(system, rom, resolution, emulator);
+            
+            if (SystemConfig.getOptBoolean("dolphin_gui") && _bezelFileInfo != null)
+            {
+                SimpleLogger.Instance.Info("[BEZEL] Decorations disabled : dolphin_gui is enabled.");
+                _bezelFileInfo = null;
+            }
 
             _resolution = resolution;
 
@@ -308,7 +318,7 @@ namespace EmulatorLauncher
                     BindBoolIniFeature(ini, "Hacks", "EFBAccessEnable", "EFBAccessEnable", "False", "True");
                     BindBoolIniFeatureOn(ini, "Hacks", "EFBScaledCopy", "EFBScaledCopy", "True", "False");
                     BindBoolIniFeature(ini, "Hacks", "EFBEmulateFormatChanges", "EFBEmulateFormatChanges", "True", "False");
-                    BindIniFeature(ini, "Enhancements", "MaxAnisotropy", "anisotropic_filtering", "0");
+                    BindIniFeature(ini, "Enhancements", "MaxAnisotropy", "anisotropic_filtering", "-1");
                     BindBoolIniFeature(ini, "Settings", "SSAA", "ssaa", "True", "False");
                     BindBoolIniFeature(ini, "Settings", "Crop", "dolphin_crop", "True", "False");
                     BindBoolIniFeature(ini, "Enhancements", "HDROutput", "enable_hdr", "True", "False");
@@ -517,12 +527,19 @@ namespace EmulatorLauncher
                     {
                         _windowRect = emulationStationBounds;
                         _bezelFileInfo = null;
+                        _fullscreen = false;
                         ini.WriteValue("Display", "Fullscreen", "False");
                     }
                     else if (ShouldRunFullscreen())
+                    {
                         ini.WriteValue("Display", "Fullscreen", "True");
+                        _fullscreen = true;
+                    }
                     else
+                    {
                         ini.WriteValue("Display", "Fullscreen", "False");
+                        _fullscreen = false;
+                    }
 
                     // Get gameID and game Name and log it
                     string gameID = "";
@@ -602,7 +619,9 @@ namespace EmulatorLauncher
                     bool realWiimoteAsEmulated = (system == "wii" && Program.SystemConfig.isOptSet("emulatedwiimotes") && Program.SystemConfig["emulatedwiimotes"] != "0" && Program.SystemConfig["emulatedwiimotes"] != "1");
 
                     // wiimote scanning
-                    if (emulatedWiiMote || system == "gamecube" || _triforce || SystemConfig.getOptBoolean("dolphin_nowiimotescan"))
+                    if (SystemConfig.isOptSet("dolphin_nowiimotescan") && !SystemConfig.getOptBoolean("dolphin_nowiimotescan"))
+                        ini.WriteValue("Core", "WiimoteContinuousScanning", "True");
+                    else if (emulatedWiiMote || system == "gamecube" || _triforce || SystemConfig.getOptBoolean("dolphin_nowiimotescan") || IsDolphinBarPresent())
                         ini.WriteValue("Core", "WiimoteContinuousScanning", "False");
                     else
                         ini.WriteValue("Core", "WiimoteContinuousScanning", "True");
@@ -719,7 +738,7 @@ namespace EmulatorLauncher
                     else if (_runWiiMenu)
                         ini.WriteValue("Core", "DefaultISO", rom);
                     else
-                        ini.WriteValue("Core", "defaultISO", "\"\"");
+                        ini.WriteValue("Core", "DefaultISO", "\"\"");
 
                     // GBA settings
                     string gbaBiosPath = Path.Combine(AppConfig.GetFullPath("bios"), "gba_bios.bin");
@@ -1094,31 +1113,64 @@ namespace EmulatorLauncher
             catch { SimpleLogger.Instance.Error($"[ERROR] Failed to load patch file : {gameID}"); }
         }
 
+        private int GetTargetMonitorIndex()
+        {
+            if (!SystemConfig.isOptSet("MonitorIndex") || string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
+                return -1;
+
+            int index;
+            if (!int.TryParse(SystemConfig["MonitorIndex"], out index))
+                return -1;
+
+            if (index < 0 || index >= Screen.AllScreens.Length)
+            {
+                SimpleLogger.Instance.Warning($"[SCREENMOVER] MonitorIndex {index} out of range ({Screen.AllScreens.Length} screen(s) detected), ignoring.");
+                return -1;
+            }
+
+            return index;
+        }
+
         public override int RunAndWait(ProcessStartInfo path)
         {
             FakeBezelFrm bezel = null;
-
-            int monitorIndex = SystemConfig["MonitorIndex"].ToInteger();
-            var screens = Screen.AllScreens;
-
-            if (monitorIndex < 0 || monitorIndex >= screens.Length)
-                monitorIndex = 0;
-
             int ret = 0;
+
+            int monitorIndex = GetTargetMonitorIndex();
+            bool guiMode = SystemConfig.getOptBoolean("dolphin_gui");
+
+            bool manageScreen = monitorIndex >= 0 && !guiMode;
+            bool needWindow = manageScreen || (_bezelFileInfo != null && !guiMode);
 
             var process = Process.Start(path);
             Job.Current.AddProcess(process);
 
             if (process != null)
             {
-                ScreenTools.MoveWindow(process, monitorIndex);
+                IntPtr hWnd = IntPtr.Zero;
 
-                process.WaitForInputIdle();
+                if (needWindow)
+                    hWnd = ScreenTools.WaitForReadyWindow(process, IsDolphinRenderWindow, _fullscreen);
+                else
+                    process.WaitForInputIdle(5000);
+
+                if (manageScreen && hWnd != IntPtr.Zero)
+                    ScreenTools.HoldWindowOnScreen(process, hWnd, monitorIndex);
+
+                ScreenTools.LogProcessWindows(process);
 
                 if (_bezelFileInfo != null)
-                    bezel = _bezelFileInfo.ShowFakeBezel(_resolution, false, monitorIndex);
+                {
+                    int bezelIndex = ScreenTools.GetScreenIndex(hWnd, manageScreen ? monitorIndex : -1);
+                    SimpleLogger.Instance.Info($"[BEZEL] Decorations will be shown on screen index {bezelIndex}");
+                    bezel = _bezelFileInfo.ShowFakeBezel(_resolution, false, bezelIndex);
+                }
 
-                User32.SetForegroundWindow(process.MainWindowHandle);
+                if (hWnd == IntPtr.Zero)
+                    hWnd = process.MainWindowHandle;
+
+                if (hWnd != IntPtr.Zero)
+                    User32.SetForegroundWindow(hWnd);
 
                 process.WaitForExit();
                 try { ret = process.ExitCode; }
@@ -1127,6 +1179,17 @@ namespace EmulatorLauncher
 
             bezel?.Dispose();
             return ret;
+        }
+
+        private static bool IsDolphinRenderWindow(IntPtr hWnd)
+        {
+            // All Qt top-level windows share the same Win32 class (Qt651QWindowIcon),
+            // so the class name cannot tell them apart. Filter on geometry instead.
+            var rect = User32.GetWindowRect(hWnd);
+            int w = rect.right - rect.left;
+            int h = rect.bottom - rect.top;
+
+            return w > 100 && h > 100;
         }
 
         #region rvzCheevos
@@ -1286,8 +1349,51 @@ namespace EmulatorLauncher
             }
             return result;
         }
+        #endregion
+
+        private static bool IsDolphinBarPresent()
+        {
+            if (_dolphinBarPresent.HasValue)
+                return _dolphinBarPresent.Value;
+
+            _dolphinBarPresent = false;
+
+            try
+            {
+                // Mayflash confirmed every DolphinBar revision advertises this
+                // descriptor with a VID:PID of 057e:0306 (see Dolphin IOWin.cpp).
+                const string mayflashDesc = "Mayflash Wiimote PC Adapter";
+
+                using (var searcher = new ManagementObjectSearcher(@"root\CIMV2",
+                    @"SELECT PNPDeviceID FROM Win32_PnPEntity WHERE Present = True " +
+                    @"AND PNPClass = 'HIDClass' AND PNPDeviceID LIKE '%VID_057E&PID_0306%'"))
+                {
+                    foreach (ManagementObject device in searcher.Get())
+                    {
+                        string pnpId = device["PNPDeviceID"] as string;
+                        if (string.IsNullOrEmpty(pnpId))
+                            continue;
+
+                        string desc = DeviceHelper.GetParentBusReportedDeviceDesc(pnpId);
+                        SimpleLogger.Instance.Info("[DolphinBar] " + pnpId + " -> desc=" + desc);
+
+                        if (mayflashDesc.Equals(desc, StringComparison.InvariantCultureIgnoreCase))
+                        {
+                            SimpleLogger.Instance.Info("[INFO] Mayflash DolphinBar detected, disabling wiimote continuous scanning.");
+                            _dolphinBarPresent = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Instance.Warning("[WARNING] DolphinBar detection failed: " + ex.Message);
+            }
+
+            return _dolphinBarPresent.Value;
+        }
     }
-    #endregion
 
     public class TriforceGame
     {

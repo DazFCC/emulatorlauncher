@@ -53,7 +53,7 @@ namespace EmulatorLauncher
                 Guns.StartSindenSoftware();
                 _sindenSoft = true;
 
-                if (!SystemConfig.isOptSet("pcsx2x6_sindenborder"))
+                if (_isArcade && !SystemConfig.isOptSet("pcsx2x6_sindenborder"))
                 {
                     pcsx2ini.WriteValue("JVS", "SindenBorderEnabled", "true");
                     pcsx2ini.WriteValue("JVS", "SindenBorderMode", "0");
@@ -301,7 +301,7 @@ namespace EmulatorLauncher
 
             string crosshairFile = Path.Combine(crosshairPath, "crosshair.png");
             if (SystemConfig.isOptSet("pcsx2_crosshairpath") && !string.IsNullOrEmpty(SystemConfig["pcsx2_crosshairpath"]))
-                crosshairFile = SystemConfig["pcsx2_crosshairpath"];
+                crosshairFile = SystemConfig["pcsx2_crosshairpath"].Replace('/', Path.DirectorySeparatorChar);
 
             if (!File.Exists(crosshairFile))
                 SimpleLogger.Instance.Info("[GUNS] No crosshair file found in " + crosshairFile);

@@ -17,6 +17,7 @@ namespace EmulatorLauncher
         private bool _forceDInput = false;
         private bool _multitap = false;
         private bool _dolphinbar = false;
+        private bool _dolphinbarChecked = false;
         private int _specialControllerIndex = 1;
 
         /// <summary>
@@ -52,13 +53,7 @@ namespace EmulatorLauncher
             UpdateSdlControllersWithHints();
 
             // Check if dolphinbar is connected (if yes we will increase controller index by 4)
-            var rawdevices = RawInputDevice.GetRawInputDevices().Where(t => t.Type == RawInputDeviceType.GamePad).ToList();
-            if (rawdevices.Any(d => d.DevicePath.Contains("VID_057E&PID_0306")))
-            {
-                if (rawdevices[0].DevicePath.Contains("VID_057E&PID_0306") && rawdevices.Where(d => d.DevicePath.Contains("VID_057E&PID_0306")).Count() > 1)
-                    _dolphinbar = true;
-                SimpleLogger.Instance.Info("[INFO] DolphinBar in GamePad mode detected, changing controller index.");
-            }
+            EnsureDolphinBarDetection();
 
             // clear existing pad sections of ini file
             for (int i = 1; i < 9; i++)
@@ -279,6 +274,13 @@ namespace EmulatorLauncher
             {
                 pcsx2ini.WriteValue("JVS", "Coin1", azerty ? "Keyboard/ParenLeft" : "Keyboard/5");
                 pcsx2ini.WriteValue("JVS", "Coin2", azerty ? "Keyboard/Minus" : "Keyboard/6");
+                pcsx2ini.WriteValue("JVS", "P1_Up", "Keyboard/Up");
+                pcsx2ini.WriteValue("JVS", "P1_Right", "Keyboard/Right");
+                pcsx2ini.WriteValue("JVS", "P1_Down", "Keyboard/Down");
+                pcsx2ini.WriteValue("JVS", "P1_Left", "Keyboard/Left");
+                pcsx2ini.AppendValue("JVS", "P1_Start", azerty ? "Keyboard/Ampersand" : "Keyboard/1");
+                pcsx2ini.AppendValue("JVS", "P2_Start", azerty ? "Keyboard/Eacute" : "Keyboard/2");
+                pcsx2ini.AppendValue("JVS", "P1_Button1", "Keyboard/Return");
 
                 if (SystemConfig.isOptSet("pcsx2_servicemode") && !string.IsNullOrEmpty(SystemConfig["pcsx2_servicemode"]))
                 {
@@ -327,10 +329,11 @@ namespace EmulatorLauncher
                 sdl3index += 4;
 
             //Define tech (SDL or XInput or DInput)
+            SimpleLogger.Instance.Info("[INFO] Player " + ctrl.PlayerIndex + ". SDL driver class: " + ctrl.SdlWrappedTechID + ", hardware button order: " + ctrl.UsesHardwareButtonOrder);
             SdlToDirectInput dinputController = null;
             bool isXinput = ctrl.IsXInputDevice;
-            
-            string tech = ctrl.IsXInputDevice ? "XInput" : "SDL";
+
+            string tech = (ctrl.IsXInputDevice && !_forceSDL) ? "XInput" : "SDL";
 
             if (_forceDInput)
             {
@@ -338,7 +341,7 @@ namespace EmulatorLauncher
                 string gamecontrollerDB = Path.Combine(AppConfig.GetFullPath("tools"), "gamecontrollerdb.txt");
                 if (!File.Exists(gamecontrollerDB))
                 {
-                    SimpleLogger.Instance.Info("[WHEELS] gamecontrollerdb.txt file not found in tools folder. Controller mapping will not be available.");
+                    SimpleLogger.Instance.Info("[CONTROLS] gamecontrollerdb.txt file not found in tools folder. Controller mapping will not be available.");
                     gamecontrollerDB = null;
                 }
                 string guid = (ctrl.Guid.ToString()).Substring(0, 24) + "00000000";
@@ -347,7 +350,7 @@ namespace EmulatorLauncher
                 try { dinputController = GameControllerDBParser.ParseByGuid(gamecontrollerDB, guid); }
                 catch { }
 
-                if (dinputController.ButtonMappings == null)
+                if (dinputController == null || dinputController.ButtonMappings == null)
                 {
                     SimpleLogger.Instance.Info("[INFO] Player " + ctrl.PlayerIndex + ". No button mapping in gamescontrollerDB file for : " + guid);
                     dinputController = null;
@@ -356,7 +359,7 @@ namespace EmulatorLauncher
 
             // Fallback
             if (dinputController == null)
-                tech = ctrl.IsXInputDevice ? "XInput" : "SDL";
+                tech = (ctrl.IsXInputDevice && !_forceSDL) ? "XInput" : "SDL";
 
             //Start writing in ini file
             pcsx2ini.ClearSection(padNumber);
@@ -370,18 +373,18 @@ namespace EmulatorLauncher
             BindIniFeatureSlider(pcsx2ini, padNumber, "LargeMotorScale", "pcsx2_rumble_strength", "1", 2);
             BindIniFeatureSlider(pcsx2ini, padNumber, "SmallMotorScale", "pcsx2_rumble_strength", "1", 2);
             BindIniFeatureSlider(pcsx2ini, padNumber, "ButtonDeadzone", "pcsx2_trigger_deadzone", "0", 2);
-            BindIniFeatureSlider(pcsx2ini, padNumber, "PressureModifier", "pcsx2_pressure_modifier", "0", 2);
+            BindIniFeatureSlider(pcsx2ini, padNumber, "PressureModifier", "pcsx2_pressure_modifier", "0.5", 2);
 
             //Get SDL controller index
             string techPadNumber = "SDL-" + sdl3index + "/";
             if (ctrl.IsXInputDevice && !_forceSDL)
-                techPadNumber = "XInput-" + ctrl.XInput.DeviceIndex + "/";
+                techPadNumber = "XInput-" + (ctrl.XInput != null ? ctrl.XInput.DeviceIndex : ctrl.DeviceIndex) + "/";
 
             bool stickasDpad = SystemConfig.getOptBoolean("pcsx2_stick_dpad");
 
             if (tech == "DInput")
             {
-                techPadNumber = "DInput-" + ctrl.DirectInput.DeviceIndex + "/";
+                techPadNumber = "DInput-" + (ctrl.DirectInput != null ? ctrl.DirectInput.DeviceIndex : ctrl.DeviceIndex) + "/";
 
                 //Write button mapping
                 if (stickasDpad)
@@ -532,6 +535,8 @@ namespace EmulatorLauncher
 
                         if (SystemConfig.isOptSet("pcsx2_servicemode") && !string.IsNullOrEmpty(SystemConfig["pcsx2_servicemode"]))
                         {
+                            pcsx2ini.Remove("JVS", "ToggleTestMode");
+                            pcsx2ini.Remove("JVS", "P1_Service");
                             pcsx2ini.WriteValue("JVS", "TestMode", "true");
                             pcsx2ini.WriteValue("JVS", "ToggleTestMode", techPadNumber + GetDInputKeyName(dinputController, "rightstick"));
                             pcsx2ini.AppendValue("JVS", "ToggleTestMode", azerty ? "Keyboard/Ccedilla" : "Keyboard/9");
@@ -604,6 +609,7 @@ namespace EmulatorLauncher
                         pcsx2ini.WriteValue("JVS", "SixButton_HeavyPunch_P1", techPadNumber + GetDInputKeyName(dinputController, "leftshoulder", 0, isXinput));
                         pcsx2ini.WriteValue("JVS", "SixButton_HeavyKick_P1", techPadNumber + GetDInputKeyName(dinputController, "rightshoulder", 0, isXinput));
 
+                        pcsx2ini.Remove("JVS", "P1_Start");
                         pcsx2ini.WriteValue("JVS", "P1_Start", techPadNumber + GetDInputKeyName(dinputController, "start", 0, isXinput));
                         pcsx2ini.AppendValue("JVS", "P1_Start", azerty ? "Keyboard/Ampersand" : "Keyboard/1");
 
@@ -698,6 +704,7 @@ namespace EmulatorLauncher
                 {
                     if (_isArcade)
                     {
+                        pcsx2ini.Remove("JVS", "P2_Start");
                         pcsx2ini.WriteValue("JVS", "P2_Start", techPadNumber + GetDInputKeyName(dinputController, "start", 0, isXinput));
                         pcsx2ini.AppendValue("JVS", "P2_Start", azerty ? "Keyboard/Eacute" : "Keyboard/2");
                         pcsx2ini.WriteValue("JVS", "Coin2", techPadNumber + GetDInputKeyName(dinputController, "back"));
@@ -932,6 +939,8 @@ namespace EmulatorLauncher
 
                         if (SystemConfig.isOptSet("pcsx2_servicemode") && !string.IsNullOrEmpty(SystemConfig["pcsx2_servicemode"]))
                         {
+                            pcsx2ini.Remove("JVS", "ToggleTestMode");
+                            pcsx2ini.Remove("JVS", "P1_Service");
                             pcsx2ini.WriteValue("JVS", "TestMode", "true");
                             pcsx2ini.WriteValue("JVS", "ToggleTestMode", techPadNumber + GetInputKeyName(ctrl, InputKey.r3, tech));
                             pcsx2ini.AppendValue("JVS", "ToggleTestMode", azerty ? "Keyboard/Ccedilla" : "Keyboard/9");
@@ -1004,6 +1013,7 @@ namespace EmulatorLauncher
                         pcsx2ini.WriteValue("JVS", "SixButton_HeavyPunch_P1", techPadNumber + GetInputKeyName(ctrl, InputKey.pageup, tech));
                         pcsx2ini.WriteValue("JVS", "SixButton_HeavyKick_P1", techPadNumber + GetInputKeyName(ctrl, InputKey.pagedown, tech));
 
+                        pcsx2ini.Remove("JVS", "P1_Start");
                         pcsx2ini.WriteValue("JVS", "P1_Start", techPadNumber + GetInputKeyName(ctrl, InputKey.start, tech));
                         pcsx2ini.AppendValue("JVS", "P1_Start", azerty ? "Keyboard/Ampersand" : "Keyboard/1");
 
@@ -1101,6 +1111,7 @@ namespace EmulatorLauncher
                 {
                     if (_isArcade)
                     {
+                        pcsx2ini.Remove("JVS", "P2_Start");
                         pcsx2ini.WriteValue("JVS", "P2_Start", techPadNumber + GetInputKeyName(ctrl, InputKey.start, tech));
                         pcsx2ini.AppendValue("JVS", "P2_Start", azerty ? "Keyboard/Eacute" : "Keyboard/2");
                         pcsx2ini.WriteValue("JVS", "Coin2", techPadNumber + GetInputKeyName(ctrl, InputKey.select, tech));
@@ -1275,6 +1286,7 @@ namespace EmulatorLauncher
             Int64 pid;
 
             bool isNintendo = c.VendorID == USB_VENDOR.NINTENDO;
+            bool hwOrder = c.UsesHardwareButtonOrder;
 
             key = key.GetRevertedAxis(out bool revertAxis);
 
@@ -1288,7 +1300,7 @@ namespace EmulatorLauncher
                     {
                         case 0: 
                             if (isNintendo)
-                                return tech == "XInput" ? "A" : "FaceEast";
+                                return tech == "XInput" ? "B" : "FaceEast";
                             else
                                 return tech == "XInput" ? "A" : "FaceSouth";
                         case 1:
@@ -1298,21 +1310,21 @@ namespace EmulatorLauncher
                                 return tech == "XInput" ? "B" : "FaceEast";
                         case 2:
                             if (isNintendo)
-                                return tech == "XInput" ? "A" : "FaceWest";
+                                return tech == "XInput" ? "X" : "FaceWest";
                             else
                                 return tech == "XInput" ? "Y" : "FaceNorth";
                         case 3:
                             if (isNintendo)
-                                return tech == "XInput" ? "A" : "FaceNorth";
+                                return tech == "XInput" ? "Y" : "FaceNorth";
                             else
                                 return tech == "XInput" ? "X" : "FaceWest"; ;
-                        case 4: return tech == "XInput" ? "LeftShoulder" : "Back";
-                        case 5: return tech == "SDL" ? "Guide" : "RightShoulder";
-                        case 6: return tech == "XInput" ? "Back" : "Start";
-                        case 7: return tech == "XInput" ? "Start" : "LeftStick";
-                        case 8: return tech == "XInput" ? "LeftStick" : "RightStick";
-                        case 9: return tech == "XInput" ? "RightStick" : "LeftShoulder";
-                        case 10: return tech == "XInput" ? "Guide" : "RightShoulder";
+                        case 4: return hwOrder ? "LeftShoulder" : "Back";
+                        case 5: return hwOrder ? "RightShoulder" : "Guide";
+                        case 6: return hwOrder ? "Back" : "Start";
+                        case 7: return hwOrder ? "Start" : "LeftStick";
+                        case 8: return hwOrder ? "LeftStick" : "RightStick";
+                        case 9: return hwOrder ? "RightStick" : "LeftShoulder";
+                        case 10: return hwOrder ? "Guide" : "RightShoulder";
                         case 11: return "DPadUp";
                         case 12: return "DPadDown";
                         case 13: return "DPadLeft";
@@ -1669,19 +1681,20 @@ namespace EmulatorLauncher
 
             var guitarModel = Guitar.GetGuitarType(c.DevicePath.ToUpperInvariant());
 
-            if (guitarModel != GuitarType.Default)
-                usableGuitar = new Guitar()
-                {
-                    Name = c.Name,
-                    VendorID = c.VendorID.ToString(),
-                    ProductID = c.ProductID.ToString(),
-                    DevicePath = c.DevicePath.ToLowerInvariant(),
-                    DinputIndex = c.DirectInput != null ? c.DirectInput.DeviceIndex : c.DeviceIndex,
-                    SDLIndex = c.SdlController != null ? c.SdlController.Index : c.DeviceIndex,
-                    XInputIndex = c.XInput != null ? c.XInput.DeviceIndex : c.DeviceIndex,
-                    ControllerIndex = c.DeviceIndex,
-                    Type = guitarModel
-                };
+            if (guitarModel == GuitarType.Default)
+                return false;
+
+            usableGuitar = new Guitar()
+            {
+                Name = c.Name,
+                VendorID = c.VendorID.ToString(),
+                ProductID = c.ProductID.ToString(),
+                DevicePath = c.DevicePath.ToLowerInvariant(),
+                DinputIndex = c.DirectInput != null ? c.DirectInput.DeviceIndex : c.DeviceIndex,
+                XInputIndex = c.XInput != null ? c.XInput.DeviceIndex : c.DeviceIndex,
+                ControllerIndex = c.DeviceIndex,
+                Type = guitarModel
+            };
 
             string guitarFile = Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "guitars", "pcsx2_guitars.yml");
 
@@ -1703,13 +1716,9 @@ namespace EmulatorLauncher
                     .OfType<YmlContainer>()
                     .ToDictionary(e => e.Name.ToLowerInvariant(), e => e);
 
-            string cGuid = c.Guid.ToString().ToLowerInvariant();
-
             if (ymlDict.TryGetValue(guitarModel.ToString().ToLowerInvariant(), out var guitarMapping))
             {
                 SimpleLogger.Instance.Info("[GUITAR] Found guitar mapping for controller " + c.Guid + " : " + guitarModel.ToString());
-
-                string iniSection = "Pad" + c.PlayerIndex;
 
                 if (guitarMapping == null || guitarMapping.Elements.Count == 0)
                     return false;
@@ -1751,6 +1760,24 @@ namespace EmulatorLauncher
             }
 
             return false;
+        }
+
+        private void EnsureDolphinBarDetection()
+        {
+            if (_dolphinbarChecked)
+                return;
+
+            _dolphinbarChecked = true;
+
+            var rawdevices = RawInputDevice.GetRawInputDevices().Where(t => t.Type == RawInputDeviceType.GamePad).ToList();
+
+            if (rawdevices.Any(d => d.DevicePath.Contains("VID_057E&PID_0306")))
+            {
+                if (rawdevices[0].DevicePath.Contains("VID_057E&PID_0306") && rawdevices.Count(d => d.DevicePath.Contains("VID_057E&PID_0306")) > 1)
+                    _dolphinbar = true;
+
+                SimpleLogger.Instance.Info("[INFO] DolphinBar in GamePad mode detected, changing controller index.");
+            }
         }
 
         private static bool performKBPadMapping(string system, string kbPadType, IniFile ini)
