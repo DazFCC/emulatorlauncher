@@ -26,6 +26,7 @@ namespace EmulatorLauncher.Libretro
         static readonly List<string> coreNoRemap = new List<string>() { "mednafen_snes" };
         static readonly List<string> arcadeSystems = new List<string>() { "arcade", "mame", "hbmame", "fbneo", "cave", "cps1", "cps2", "cps3", "atomiswave", "naomi", "naomi2", "gaelco", "segastv", "neogeo64", "model3", "model2" };
         private static Dictionary<int, int> _indexes = new Dictionary<int, int>();
+        private static HashSet<int> _forcedIndexes = new HashSet<int>();
 
         /// <summary>
         /// Main entry point from Libretro generator to write controllers config in retroarch config file
@@ -37,9 +38,38 @@ namespace EmulatorLauncher.Libretro
         public static bool WriteControllersConfig(ConfigFile retroconfig, string system, string core, out bool kbPad)
         {
             kbPad = false;
+
+            if (Program.SystemConfig.isOptSet("input_driver") && Program.SystemConfig["input_driver"] == "xinput")
+                _inputDriver = "xinput";
+
+            if (Program.SystemConfig.isOptSet("input_driver") && Program.SystemConfig["input_driver"] == "dinput")
+                _inputDriver = "dinput";
+
+            // Let RetroArch map controllers with its own autoconfig profiles (e.g. Bliss-Box: one profile per connected pad type)
+            if (Program.SystemConfig.getOptBoolean("libretro_autoconfig"))
+            {
+                SimpleLogger.Instance.Info("[INFO] Controllers mapped by RetroArch autoconfig profiles.");
+
+                CleanControllerConfig(retroconfig);
+                retroconfig["input_autodetect_enable"] = "true";
+
+                // 'xinput' is RetroArch default on Windows: XInput pads + DirectInput pads using 'autoconfig\dinput' profiles
+                if (Program.SystemConfig.isOptSet("input_driver") && !string.IsNullOrEmpty(Program.SystemConfig["input_driver"]))
+                    retroconfig["input_joypad_driver"] = Program.SystemConfig["input_driver"];
+                else
+                    retroconfig["input_joypad_driver"] = "xinput";
+
+                WriteKBHotKeyConfig(retroconfig, core);
+                return false;
+            }
+
             if (Program.SystemConfig.isOptSet("disableautocontrollers") && Program.SystemConfig["disableautocontrollers"] == "1")
             {
                 SimpleLogger.Instance.Info("[INFO] Auto controller configuration disabled.");
+
+                if (Program.SystemConfig.isOptSet("input_driver") && !string.IsNullOrEmpty(Program.SystemConfig["input_driver"]))
+                    retroconfig["input_joypad_driver"] = Program.SystemConfig["input_driver"];
+
                 WriteKBHotKeyConfig(retroconfig, core, true);
                 return false;
             }
@@ -47,12 +77,7 @@ namespace EmulatorLauncher.Libretro
             _buttonTrigger = Program.SystemConfig.getOptBoolean("buttonTrigger");
 
             _indexes.Clear();
-
-            if (Program.SystemConfig.isOptSet("input_driver") && Program.SystemConfig["input_driver"] == "xinput")
-                _inputDriver = "xinput";
-
-            if (Program.SystemConfig.isOptSet("input_driver") && Program.SystemConfig["input_driver"] == "dinput")
-                _inputDriver = "dinput";
+            _forcedIndexes.Clear();
 
             // no menu in non full uimode
             if (Program.SystemConfig.isOptSet("uimode") && Program.SystemConfig["uimode"] != "Full")
@@ -112,16 +137,33 @@ namespace EmulatorLauncher.Libretro
                     foreach (var pair in duplicatesWithKeys)
                         SimpleLogger.Instance.Warning($"[WARNING] Value {pair.Key} is duplicated for keys: {string.Join(", ", pair.Value)}");
 
-                    // Replace sdlcontroller index with deviceindex, we don't understand why sdl is not null and returns same index 0 for all controllers !
-                    if (_inputDriver == "sdl2")
-                    {
-                        SimpleLogger.Instance.Info("[INFO] Trying to fix duplicate index.");
+                    // Two players sharing the same joypad index means the device resolution failed
+                    // (typically 2-players arcade boards exposing several HID collections behind a
+                    // single device). Spread the players over free indexes, in player order, so at
+                    // least every player drives a different pad. Indexes explicitly forced by the
+                    // user through pX_joypad_index are never touched.
+                    SimpleLogger.Instance.Info("[INFO] Trying to fix duplicate index.");
 
-                        foreach (var controller in Program.Controllers)
+                    var used = new HashSet<int>(_forcedIndexes.Where(p => _indexes.ContainsKey(p)).Select(p => _indexes[p]));
+
+                    foreach (var controller in Program.Controllers.Where(c => !c.IsKeyboard).OrderBy(c => c.PlayerIndex))
+                    {
+                        if (_forcedIndexes.Contains(controller.PlayerIndex))
+                            continue;
+
+                        int index;
+                        if (!_indexes.TryGetValue(controller.PlayerIndex, out index) || index < 0 || used.Contains(index))
                         {
-                            int index = controller.DeviceIndex;
-                            retroconfig[string.Format("input_player{0}_joypad_index", controller.PlayerIndex)] = index.ToString();
+                            index = controller.DeviceIndex >= 0 ? controller.DeviceIndex : 0;
+
+                            while (used.Contains(index))
+                                index++;
                         }
+
+                        used.Add(index);
+                        _indexes[controller.PlayerIndex] = index;
+
+                        retroconfig[string.Format("input_player{0}_joypad_index", controller.PlayerIndex)] = index.ToString();
                     }
                 }
             }
@@ -576,6 +618,12 @@ namespace EmulatorLauncher.Libretro
                     retroconfig["input_turbo_bind"] = Program.SystemConfig["turbo_button"];
                 else
                     retroconfig["input_turbo_bind"] = "12";    // L2 by default
+
+                if (Program.SystemConfig.isOptSet("turbo_speed") && !string.IsNullOrEmpty(Program.SystemConfig["turbo_speed"]))
+                    retroconfig["input_turbo_period"] = Program.SystemConfig["turbo_speed"].ToIntegerString();
+                else
+                    retroconfig["input_turbo_period"] = "6";
+
             }
             else
             {
@@ -583,6 +631,7 @@ namespace EmulatorLauncher.Libretro
                 retroconfig["input_turbo_mode"] = "0";
                 retroconfig["input_turbo_button"] = "0";
                 retroconfig["input_turbo_bind"] = "-1";
+                retroconfig["input_turbo_period"] = "6";
             }
 
             if (controller.Name != null && controller.Name == "Keyboard")
@@ -603,15 +652,19 @@ namespace EmulatorLauncher.Libretro
                 {
                     index = forcedIndex;
                     forceArcadeIndex = true;
+                    _forcedIndexes.Add(controller.PlayerIndex);
                     SimpleLogger.Instance.Info("[INFO] Forced joypad index for player " + controller.PlayerIndex + " : " + index);
                 }
             }
 
             if (!forceArcadeIndex)
             {
-                if (_inputDriver == "sdl2" && !string.IsNullOrEmpty(controller.DevicePath) && controller.SdlController != null)
+                // A device path shared by several players cannot resolve a joystick index: every
+                // lookup would return the same device. Keep the index reported by EmulationStation,
+                // which is the SDL enumeration index and is correct in that case.
+                if (_inputDriver == "sdl2" && !string.IsNullOrEmpty(controller.DevicePath) && controller.SdlController != null && !controller.HasAmbiguousDevicePath)
                     index = controller.SdlController.Index > -1 ? controller.SdlController.Index : controller.DeviceIndex;
-                else if (_inputDriver == "dinput" && controller.DirectInput != null && controller.DirectInput.DeviceIndex > -1)
+                else if (_inputDriver == "dinput" && controller.DirectInput != null && controller.DirectInput.DeviceIndex > -1 && !controller.HasAmbiguousDevicePath)
                     index = controller.DirectInput.DeviceIndex;
                 else if (_inputDriver == "xinput" && controller.XInput != null && controller.XInput.DeviceIndex > -1)
                 {

@@ -233,21 +233,23 @@ namespace EmulatorLauncher
                 catch (Exception ex) { SimpleLogger.Instance.Warning("[RunAndWait] Unable to kill existing rpcs3 process: " + ex.Message); }
             }
 
-            Process process = Process.Start(path);
+            var process = StartEmulator(path);
+            if (process == null)
+                return ExitCode == ExitCodes.CustomError ? (int)ExitCodes.CustomError : 0;
+
             Job.Current.AddProcess(process);
 
             using (var escHook = new KeyboardInterceptor(process, new KeyTrigger(Keys.Escape)))
             {
                 process.WaitForExit();
 
-                if (_sindenSoft)
-                    Guns.KillSindenSoftware();
+                ReportExitCode(process, path);
 
                 // In some cases, the process seems to be launched again by the main one
                 process = Process.GetProcessesByName("rpcs3").FirstOrDefault();
                 process?.WaitForExit();
 
-                return 0;
+                return ExitCode == ExitCodes.CustomError ? (int)ExitCodes.CustomError : 0;
             }
         }
 
@@ -285,11 +287,15 @@ namespace EmulatorLauncher
 
                     if (SystemConfig.isOptSet("MonitorIndex") && !string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
                     {
-                        int index = SystemConfig["MonitorIndex"].ToInteger();
-
-                        if (index != -1)
+                        // gs_frame.cpp : index 0-based in QGuiApplication::screens(),
+                        // Qt order = primary first, same as SDL order.
+                        int index = Displays.IndexOf(Program.TargetScreen, MonitorOrder.SdlLike);
+                        if (index >= 0)
                         {
-                            index = index - 1;
+                            // RPCS3 saves its window geometry on every close (gs_frame::hide_on_close) and reuses it
+                            // when "screen" matches the last used screen (gui_application.cpp). A restored geometry can
+                            // land on the wrong monitor, so always drop it and let RPCS3 center the window on the target screen.
+                            ini.Remove("GSFrame", "geometry");
                             ini.WriteValue("GSFrame", "screen", index.ToString());
                         }
                     }

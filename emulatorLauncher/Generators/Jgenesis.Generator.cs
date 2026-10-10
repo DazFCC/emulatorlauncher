@@ -16,7 +16,6 @@ namespace EmulatorLauncher
         private ScreenResolution _resolution;
         private SaveStatesWatcher _saveStatesWatcher;
         private int _saveStateSlot;
-        private bool _sindenSoft;
         private string _exeName;
         static List<string> _mdSystems = new List<string>() { "sega_cd", "genesis", "sega_32x" };
         static List<string> _noZipSystems = new List<string>() { "sega_cd" };
@@ -114,6 +113,10 @@ namespace EmulatorLauncher
 
         private void SetupTomlConfiguration(string path, string jGenSystem, string system, string savesSystem, bool fullscreen)
         {
+            string portableFile = Path.Combine(path, "portable.txt");
+            if (!File.Exists(portableFile))
+                try { File.WriteAllText(portableFile, ""); } catch { }
+
             string settingsFile = Path.Combine(path, "jgenesis-config.toml");
 
             if (!File.Exists(settingsFile))
@@ -436,7 +439,6 @@ namespace EmulatorLauncher
             if (guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
             {
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
             }
 
             if (!SystemConfig.getOptBoolean("use_guns"))
@@ -550,10 +552,14 @@ namespace EmulatorLauncher
                 case "genesis":
                     return "Genesis";
                 case "mastersystem":
-                case "gamegear":
-                case "gg":
                 case "ms":
                     return "MasterSystem";
+                case "sg1000":
+                case "sg-1000":
+                    return "Sg1000";
+                case "gamegear":
+                case "gg":
+                    return "GameGear";
                 case "gb":
                 case "gbc":
                 case "gameboy":
@@ -564,6 +570,10 @@ namespace EmulatorLauncher
                 case "sega32x":
                 case "mega32x":
                     return "Sega32X";
+                case "pcengine":
+                case "pce":
+                case "turbografx16":
+                    return "PcEngine";
             }
             return null;
         }
@@ -629,9 +639,6 @@ namespace EmulatorLauncher
                 _saveStatesWatcher.Dispose();
                 _saveStatesWatcher = null;
             }
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
 
             base.Cleanup();
         }

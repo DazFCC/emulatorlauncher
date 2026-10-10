@@ -26,19 +26,7 @@ namespace EmulatorLauncher
         {
             // Always kill any existing MameHook process at startup
             SimpleLogger.Instance.Info("[INFO] Checking for existing MameHook process");
-            try
-            {
-                var existingProcess = Process.GetProcessesByName("mamehook").FirstOrDefault();
-                if (existingProcess != null)
-                {
-                    existingProcess.Kill();
-                    existingProcess.WaitForExit(1000);
-                }
-            }
-            catch (Exception ex)
-            {
-                SimpleLogger.Instance.Error($"[ERROR] Failed to stop existing MameHooker: {ex.Message}");
-            }
+            MameHooker.KillMameHooker();
 
             bool hbmame = emulator == "hbmame";
             _groovy = emulator == "groovymame";
@@ -329,13 +317,12 @@ namespace EmulatorLauncher
                 else
                     retList.Add("-ka");
             }
-            
+
             // Monitor index
             if (SystemConfig.isOptSet("MonitorIndex") && !string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
             {
-                string mameMonitor = "\\" + "\\" + ".\\" + "DISPLAY" + SystemConfig["MonitorIndex"];
                 retList.Add("-screen");
-                retList.Add(mameMonitor);
+                retList.Add(Program.TargetScreen.DeviceName);
             }
 
             // Screen rotation
@@ -802,17 +789,33 @@ namespace EmulatorLauncher
             }
         }
 
+        public override int RunAndWait(ProcessStartInfo path)
+        {
+            int ret = base.RunAndWait(path);
+
+            if (ExitCode != ExitCodes.CustomError)
+            {
+                string diagnostic = LaunchDiagnostics.FromMameExitCode(RawExitCode, path);
+                if (diagnostic != null)
+                {
+                    SimpleLogger.Instance.Error("[Mame64Generator] MAME exit code " + RawExitCode + " : the game did not run.");
+                    SetCustomError(diagnostic);
+
+                    if (ret == 0)
+                        ret = (int)ExitCodes.CustomError;
+                }
+            }
+
+            return ret;
+        }
+
         public override void Cleanup()
         {
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
-
             if (_filesToRestore != null)
             {
                 foreach (var f in _filesToRestore)
                 {
                     string backupFile = f + ".backup";
-
                     if (File.Exists(backupFile))
                     {
                         try
@@ -822,17 +825,45 @@ namespace EmulatorLauncher
                                 try { Directory.CreateDirectory(cfgBackupPath); } catch { }
                             string filename = Path.GetFileName(f);
                             string target = Path.Combine(cfgBackupPath, filename);
-
+                            // Complete archive of the file as written by MAME during the session, for future reference
                             File.Copy(f, target, true);
-                            File.Copy(backupFile, f, true);
+                            // Only restore the <input> from before launch: everything else
+                            // (video, mixer, crosshairs, etc. written by MAME during the session) is preserved
+                            RestoreInputFromBackup(f, backupFile);
                             File.Delete(backupFile);
                         }
                         catch { }
                     }
                 }
             }
-
             base.Cleanup();
+        }
+
+        private void RestoreInputFromBackup(string liveFile, string backupFile)
+        {
+            try
+            {
+                var liveDoc = XDocument.Load(liveFile);
+                var backupDoc = XDocument.Load(backupFile);
+                var liveSystem = liveDoc.Root?.Element("system");
+                var backupSystem = backupDoc.Root?.Element("system");
+                if (liveSystem == null || backupSystem == null)
+                {
+                    // Structure inattendue : on retombe sur l'ancien comportement (restore complet)
+                    File.Copy(backupFile, liveFile, true);
+                    return;
+                }
+                var backupInput = backupSystem.Element("input");
+                liveSystem.Element("input")?.Remove();
+                if (backupInput != null)
+                    liveSystem.Add(new XElement(backupInput));
+                liveDoc.Save(liveFile);
+            }
+            catch
+            {
+                // Filet de sécurité : ne jamais laisser le fichier à moitié écrit
+                try { File.Copy(backupFile, liveFile, true); } catch { }
+            }
         }
 
         class GroovyMameProfile

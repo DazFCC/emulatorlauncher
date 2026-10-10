@@ -30,6 +30,7 @@ namespace EmulatorLauncher
         private string _exe;
         private string _gamePath;
         private bool _remapexit = false;
+        private bool _exclusiveFullscreen = false;
 
         public override System.Diagnostics.ProcessStartInfo Generate(string system, string emulator, string core, string rom, string playersControllers, ScreenResolution resolution)
         {
@@ -52,6 +53,10 @@ namespace EmulatorLauncher
             var versionInfo = FileVersionInfo.GetVersionInfo(exe);
             string versionString = versionInfo.FileMajorPart + "." + versionInfo.FileMinorPart + "." + versionInfo.FileBuildPart + "." + versionInfo.FilePrivatePart;
             Version.TryParse(versionString, out _version);
+
+            _exclusiveFullscreen = _version >= new Version(10, 8, 0, 0) && resolution != null && SystemConfig.getOptBoolean("vp_exclusivefullscreen");
+            if (_exclusiveFullscreen)
+                DependsOnDesktopResolution = false;
 
             rom = this.TryUnZipGameIfNeeded(system, rom, true, false);
             if (Directory.Exists(rom))
@@ -89,83 +94,90 @@ namespace EmulatorLauncher
 
             SimpleLogger.Instance.Info("[INFO] using rompath: " + romPath);
 
-            ScreenRes sr = ScreenRes.Load(Path.GetDirectoryName(rom));
-            if (sr != null && !SystemConfig.getOptBoolean("noscreenres"))
+            
+            if (!SystemConfig.getOptBoolean("noscreenres"))
             {
-                if (SystemConfig.isOptSet("ScreenResX") && ! string.IsNullOrEmpty(SystemConfig["ScreenResX"]))
-                    sr.ScreenResX = SystemConfig["ScreenResX"].ToInteger();
-                else
-                    sr.ScreenResX = resolution == null ? Screen.PrimaryScreen.Bounds.Width : resolution.Width;
+                ScreenRes sr = ScreenRes.Load(Path.GetDirectoryName(rom));
 
-                if (SystemConfig.isOptSet("ScreenResY") && !string.IsNullOrEmpty(SystemConfig["ScreenResY"]))
-                    sr.ScreenResY = SystemConfig["ScreenResY"].ToInteger();
-                else
-                    sr.ScreenResY = resolution == null ? Screen.PrimaryScreen.Bounds.Height : resolution.Height;
+                if (sr != null)
+                {
+                    if (SystemConfig.isOptSet("ScreenResX") && !string.IsNullOrEmpty(SystemConfig["ScreenResX"]))
+                        sr.ScreenResX = SystemConfig["ScreenResX"].ToInteger();
+                    else
+                        sr.ScreenResX = resolution == null ? Screen.PrimaryScreen.Bounds.Width : resolution.Width;
 
-                if (SystemConfig.isOptSet("Screen2ResX") && !string.IsNullOrEmpty(SystemConfig["Screen2ResX"]) && SystemConfig.isOptSet("Screen2ResY") && !string.IsNullOrEmpty(SystemConfig["Screen2ResY"]))
-                {
-                    sr.Screen2ResX = SystemConfig["Screen2ResX"].ToInteger();
-                    sr.Screen2ResY = SystemConfig["Screen2ResY"].ToInteger();
-                }
-                else
-                {
-                    Screen secondary = Screen.AllScreens.FirstOrDefault(s => !s.Primary);
-                    if (secondary != null)
+                    if (SystemConfig.isOptSet("ScreenResY") && !string.IsNullOrEmpty(SystemConfig["ScreenResY"]))
+                        sr.ScreenResY = SystemConfig["ScreenResY"].ToInteger();
+                    else
+                        sr.ScreenResY = resolution == null ? Screen.PrimaryScreen.Bounds.Height : resolution.Height;
+
+                    if (SystemConfig.isOptSet("Screen2ResX") && !string.IsNullOrEmpty(SystemConfig["Screen2ResX"]) && SystemConfig.isOptSet("Screen2ResY") && !string.IsNullOrEmpty(SystemConfig["Screen2ResY"]))
                     {
-                        sr.Screen2ResX = secondary.Bounds.Width;
-                        sr.Screen2ResY = secondary.Bounds.Height;
+                        sr.Screen2ResX = SystemConfig["Screen2ResX"].ToInteger();
+                        sr.Screen2ResY = SystemConfig["Screen2ResY"].ToInteger();
                     }
+                    else
+                    {
+                        Screen secondary = Screen.AllScreens.FirstOrDefault(s => !s.Primary);
+                        if (secondary != null)
+                        {
+                            sr.Screen2ResX = secondary.Bounds.Width;
+                            sr.Screen2ResY = secondary.Bounds.Height;
+                        }
+                    }
+
+                    if (SystemConfig.isOptSet("Monitor") && !string.IsNullOrEmpty(SystemConfig["Monitor"]))
+                        sr.Monitor = SystemConfig["Monitor"].ToInteger();
+                    else
+                        sr.Monitor = Screen.AllScreens.Length == 1 ? 1 : 2;
+
+                    if (SystemConfig.isOptSet("Screen2posX") && !string.IsNullOrEmpty(SystemConfig["Screen2posX"]) && SystemConfig.isOptSet("Screen2posY") && !string.IsNullOrEmpty(SystemConfig["Screen2posY"]))
+                    {
+                        sr.Screen2posX = SystemConfig["Screen2posX"].ToInteger();
+                        sr.Screen2posY = SystemConfig["Screen2posY"].ToInteger();
+                    }
+
+                    if (SystemConfig.isOptSet("DmdResX") && !string.IsNullOrEmpty(SystemConfig["DmdResX"]) && SystemConfig.isOptSet("DmdResY") && !string.IsNullOrEmpty(SystemConfig["DmdResY"]))
+                    {
+                        sr.DmdResX = SystemConfig["DmdResX"].ToInteger();
+                        sr.DmdResY = SystemConfig["DmdResY"].ToInteger();
+                    }
+
+                    if (SystemConfig.isOptSet("DmdposX") && !string.IsNullOrEmpty(SystemConfig["DmdposX"]) && SystemConfig.isOptSet("DmdposY") && !string.IsNullOrEmpty(SystemConfig["DmdposY"]))
+                    {
+                        sr.DmdPosX = SystemConfig["DmdposX"].ToInteger();
+                        sr.DmdPosY = SystemConfig["DmdposY"].ToInteger();
+                    }
+
+                    if (SystemConfig.isOptSet("FlipLedDisplay") && SystemConfig.getOptBoolean("FlipLedDisplay"))
+                        sr.DmdFlipY = 1;
+                    else
+                        sr.DmdFlipY = 0;
+
+                    if (SystemConfig.isOptSet("Screen2posXStart") && !string.IsNullOrEmpty(SystemConfig["Screen2posXStart"]) && SystemConfig.isOptSet("Screen2posYStart") && !string.IsNullOrEmpty(SystemConfig["Screen2posYStart"]))
+                    {
+                        sr.Screen2posXStart = SystemConfig["Screen2posXStart"].ToInteger();
+                        sr.Screen2posYStart = SystemConfig["Screen2posYStart"].ToInteger();
+                    }
+
+                    if (SystemConfig.isOptSet("Screen2ResXStart") && !string.IsNullOrEmpty(SystemConfig["Screen2ResXStart"]) && SystemConfig.isOptSet("Screen2ResYStart") && !string.IsNullOrEmpty(SystemConfig["Screen2ResYStart"]))
+                    {
+                        sr.Screen2ResXStart = SystemConfig["Screen2ResXStart"].ToInteger();
+                        sr.Screen2ResYStart = SystemConfig["Screen2ResYStart"].ToInteger();
+                    }
+
+                    if (SystemConfig.isOptSet("FramePath") && !string.IsNullOrEmpty(SystemConfig["FramePath"]))
+                        sr.FramePath = SystemConfig["FramePath"].Replace('/', '\\');
+                    else
+                        sr.FramePath = "#";
+
+                    sr.Save();
                 }
-
-                if (SystemConfig.isOptSet("Monitor") && !string.IsNullOrEmpty(SystemConfig["Monitor"]))
-                    sr.Monitor = SystemConfig["Monitor"].ToInteger();
-                else
-                    sr.Monitor = Screen.AllScreens.Length == 1 ? 1 : 2;
-
-                if (SystemConfig.isOptSet("Screen2posX") && !string.IsNullOrEmpty(SystemConfig["Screen2posX"]) && SystemConfig.isOptSet("Screen2posY") && !string.IsNullOrEmpty(SystemConfig["Screen2posY"]))
-                {
-                    sr.Screen2posX = SystemConfig["Screen2posX"].ToInteger();
-                    sr.Screen2posY = SystemConfig["Screen2posY"].ToInteger();
-                }
-
-                if (SystemConfig.isOptSet("DmdResX") && !string.IsNullOrEmpty(SystemConfig["DmdResX"]) && SystemConfig.isOptSet("DmdResY") && !string.IsNullOrEmpty(SystemConfig["DmdResY"]))
-                {
-                    sr.DmdResX = SystemConfig["DmdResX"].ToInteger();
-                    sr.DmdResY = SystemConfig["DmdResY"].ToInteger();
-                }
-
-                if (SystemConfig.isOptSet("DmdposX") && !string.IsNullOrEmpty(SystemConfig["DmdposX"]) && SystemConfig.isOptSet("DmdposY") && !string.IsNullOrEmpty(SystemConfig["DmdposY"]))
-                {
-                    sr.DmdPosX = SystemConfig["DmdposX"].ToInteger();
-                    sr.DmdPosY = SystemConfig["DmdposY"].ToInteger();
-                }
-
-                if (SystemConfig.isOptSet("FlipLedDisplay") && SystemConfig.getOptBoolean("FlipLedDisplay"))
-                    sr.DmdFlipY = 1;
-                else
-                    sr.DmdFlipY = 0;
-
-                if (SystemConfig.isOptSet("Screen2posXStart") && !string.IsNullOrEmpty(SystemConfig["Screen2posXStart"]) && SystemConfig.isOptSet("Screen2posYStart") && !string.IsNullOrEmpty(SystemConfig["Screen2posYStart"]))
-                {
-                    sr.Screen2posXStart = SystemConfig["Screen2posXStart"].ToInteger();
-                    sr.Screen2posYStart = SystemConfig["Screen2posYStart"].ToInteger();
-                }
-
-                if (SystemConfig.isOptSet("Screen2ResXStart") && !string.IsNullOrEmpty(SystemConfig["Screen2ResXStart"]) && SystemConfig.isOptSet("Screen2ResYStart") && !string.IsNullOrEmpty(SystemConfig["Screen2ResYStart"]))
-                {
-                    sr.Screen2ResXStart = SystemConfig["Screen2ResXStart"].ToInteger();
-                    sr.Screen2ResYStart = SystemConfig["Screen2ResYStart"].ToInteger();
-                }
-
-                if (SystemConfig.isOptSet("FramePath") && !string.IsNullOrEmpty(SystemConfig["FramePath"]))
-                    sr.FramePath = SystemConfig["FramePath"].Replace('/', '\\');
-                else
-                    sr.FramePath = "#";
-
-                sr.Save();
             }
+            else
+                SimpleLogger.Instance.Info("[Generator] noscreenres set - ScreenRes.txt left untouched.");
 
-            SetupOptions(path, romPath, resolution);
+            SetupOptions(path, romPath, rom, resolution);
             SetupB2STableSettings(path);
 
             var commands = new List<string>();
@@ -236,14 +248,14 @@ namespace EmulatorLauncher
             return null;
         }
 
-        private void SetupOptions(string path, string romPath, ScreenResolution resolution)
+        private void SetupOptions(string path, string romPath, string vpxFile, ScreenResolution resolution)
         {
             if (_version >= new Version(10, 8, 0, 0))
                 SetupOptionsIniFile(path, resolution);
             else
                 SetupOptionsRegistry(resolution);
 
-            SetupVPinMameOptions(path, romPath);
+            SetupVPinMameOptions(path, romPath, vpxFile);
             SetupDmdDevice(path);
         }
 
@@ -286,7 +298,16 @@ namespace EmulatorLauncher
                 // Resolution and fullscreen
                 ini.WriteValue("Player", "Width", bounds.Width.ToString());
                 ini.WriteValue("Player", "Height", bounds.Height.ToString());
-                ini.WriteValue("Player", "FullScreen", "0"); // resolution == null ? "0" : "1" -> Let desktop resolution handle
+
+                if (_exclusiveFullscreen)
+                {
+                    // VPX switches to the selected video mode itself, desktop resolution is left untouched
+                    ini.WriteValue("Player", "FullScreen", "1");
+                    ini.WriteValue("Player", "RefreshRate", resolution.DisplayFrequency.ToString());
+                }
+                else
+                    ini.WriteValue("Player", "FullScreen", "0");
+
                 ini.WriteValue("Player", "Display", monitorIndex.ToString());
 
                 // Vertical sync
@@ -364,12 +385,12 @@ namespace EmulatorLauncher
             }
         }
 
-        private static void SetupVPinMameOptions(string path, string romPath)
+        private static void SetupVPinMameOptions(string path, string romPath, string vpxFile)
         {
             var softwareKey = Registry.CurrentUser.OpenSubKey(@"Software", true);
             if (softwareKey == null)
                 return;
-            
+
             var visualPinMame = softwareKey.CreateSubKey("Freeware").CreateSubKey("Visual PinMame");
             if (visualPinMame != null)
             {
@@ -412,87 +433,82 @@ namespace EmulatorLauncher
                     globalKey.Close();
                 }
 
-                // default key
+                // default key: template used by VPinMAME for roms that do not have their own key yet
                 if (defaultKey != null)
                 {
-                    SetOption(defaultKey, "cheat", 1);
-
-                    if (Program.SystemConfig.getOptBoolean("vpmame_dmd"))
-                    {
-                        SetOption(defaultKey, "showpindmd", 1);
-                        SetOption(defaultKey, "showwindmd", 0);
-                    }
-                    else if (Program.SystemConfig["vpmame_dmd"] == "none")
-                    {
-                        SetOption(defaultKey, "showpindmd", 0);
-                        SetOption(defaultKey, "showwindmd", 0);
-                    }
-                    else
-                    {
-                        SetOption(defaultKey, "showpindmd", 0);
-                        SetOption(defaultKey, "showwindmd", 1);
-                    }
-
-                    if (Program.SystemConfig.isOptSet("vpmame_soundmode") && !string.IsNullOrEmpty(Program.SystemConfig["vpmame_soundmode"]))
-                    {
-                        int soundMode = Program.SystemConfig["vpmame_soundmode"].ToInteger();
-                        SetOption(defaultKey, "sound_mode", soundMode);
-                    }
-                    else
-                        SetOption(defaultKey, "sound_mode", 0);
-
-                    BindBoolRegistryFeature(defaultKey, "cabinet_mode", "vpmame_cabinet", 1, 0, true);
-                    BindBoolRegistryFeature(defaultKey, "dmd_colorize", "vpmame_colordmd", 1, 0, false);
-
+                    SetupVPinMameRomKey(defaultKey);
                     defaultKey.Close();
                 }
 
-                // per rom config
-                if (romPath != null)
+                // per rom config: only the rom used by the launched table, to preserve user tweaks on other roms
+                string romName = VpxRomNameReader.GetRomName(vpxFile, romPath);
+                if (!string.IsNullOrEmpty(romName))
                 {
+                    SimpleLogger.Instance.Info("[Generator] VPinMAME rom name read from table: " + romName);
+
+                    // CreateSubKey opens the key if it already exists
+                    using (var romKey = visualPinMame.CreateSubKey(romName))
+                    {
+                        if (romKey != null)
+                            SetupVPinMameRomKey(romKey);
+                    }
+                }
+
+                else if (!string.IsNullOrEmpty(romPath) && Directory.Exists(romPath))
+                {
+                    // Fallback: rom name could not be read from the table, update every rom key
+                    SimpleLogger.Instance.Info("[Generator] VPinMAME rom name not found in table, updating all rom keys.");
+
                     string[] romList = Directory.GetFiles(romPath, "*.zip").Select(r => Path.GetFileNameWithoutExtension(r)).Distinct().ToArray();
                     foreach (var rom in romList)
                     {
-                        var romKey = visualPinMame.OpenSubKey(rom, true);
-
-                        if (romKey == null)
-                            romKey = visualPinMame.CreateSubKey(rom);
-
-                        SetOption(romKey, "cheat", 1);
-
-                        if (Program.SystemConfig.getOptBoolean("vpmame_dmd"))
+                        using (var romKey = visualPinMame.CreateSubKey(rom))
                         {
-                            SetOption(romKey, "showpindmd", 1);
-                            SetOption(romKey, "showwindmd", 0);
+                            if (romKey != null)
+                                SetupVPinMameRomKey(romKey);
                         }
-                        else if (Program.SystemConfig["vpmame_dmd"] == "none")
-                        {
-                            SetOption(romKey, "showpindmd", 0);
-                            SetOption(romKey, "showwindmd", 0);
-                        }
-                        else
-                        {
-                            SetOption(romKey, "showpindmd", 0);
-                            SetOption(romKey, "showwindmd", 1);
-                        }
-
-                        if (Program.SystemConfig.isOptSet("vpmame_soundmode") && !string.IsNullOrEmpty(Program.SystemConfig["vpmame_soundmode"]))
-                        {
-                            int soundMode = Program.SystemConfig["vpmame_soundmode"].ToInteger();
-                            SetOption(romKey, "sound_mode", soundMode);
-                        }
-                        else
-                            SetOption(romKey, "sound_mode", 0);
-
-                        BindBoolRegistryFeature(romKey, "cabinet_mode", "vpmame_cabinet", 1, 0, true);
-                        BindBoolRegistryFeature(romKey, "dmd_colorize", "vpmame_colordmd", 1, 0, false);
-
-                        romKey.Close();
                     }
                 }
+
+                visualPinMame.Close();
             }
 
             softwareKey.Close();
+        }
+
+        // Per-rom VPinMAME settings, shared by the 'default' key and the rom keys
+        private static void SetupVPinMameRomKey(RegistryKey key)
+        {
+            SetOption(key, "cheat", 1);
+
+            if (Program.SystemConfig.getOptBoolean("vpmame_dmd"))
+            {
+                SetOption(key, "showpindmd", 1);
+                SetOption(key, "showwindmd", 0);
+            }
+            else if (Program.SystemConfig["vpmame_dmd"] == "none")
+            {
+                SetOption(key, "showpindmd", 0);
+                SetOption(key, "showwindmd", 0);
+            }
+            else
+            {
+                SetOption(key, "showpindmd", 0);
+                SetOption(key, "showwindmd", 1);
+            }
+
+            if (Program.SystemConfig.isOptSet("vpmame_soundmode") && !string.IsNullOrEmpty(Program.SystemConfig["vpmame_soundmode"]))
+                SetOption(key, "sound_mode", Program.SystemConfig["vpmame_soundmode"].ToInteger());
+            else
+                SetOption(key, "sound_mode", 0);
+
+            if (Program.SystemConfig.isOptSet("vpmame_dmdsize") && !string.IsNullOrEmpty(Program.SystemConfig["vpmame_dmdsize"]))
+                SetOption(key, "dmd_doublesize", Program.SystemConfig["vpmame_dmdsize"].ToInteger());
+            else
+                SetOption(key, "dmd_doublesize", 0);
+
+            BindBoolRegistryFeature(key, "cabinet_mode", "vpmame_cabinet", 1, 0, true);
+            BindBoolRegistryFeature(key, "dmd_colorize", "vpmame_colordmd", 1, 0, false);
         }
 
         private void SetupDmdDevice(string path)

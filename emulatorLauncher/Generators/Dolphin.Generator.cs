@@ -38,9 +38,6 @@ namespace EmulatorLauncher
                 _saveStatesWatcher = null;
             }
 
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
-
             base.Cleanup();
         }
 
@@ -49,7 +46,6 @@ namespace EmulatorLauncher
         private bool _triforce = false;
         private Rectangle _windowRect = Rectangle.Empty;
         private bool _runWiiMenu = false;
-        private bool _sindenSoft = false;
         private bool _crediar = false;
         private bool _fullscreen = false;
 
@@ -250,26 +246,24 @@ namespace EmulatorLauncher
                     }
 
                     // various performance hacks - Default Off
-                    if (SystemConfig.isOptSet("perf_hacks"))
+                    // Not enabled (AUTO included): back to Dolphin defaults, GFX.ini is persistent
+                    if (SystemConfig.getOptBoolean("perf_hacks"))
                     {
-                        if (SystemConfig.getOptBoolean("perf_hacks"))
-                        {
-                            ini.WriteValue("Hacks", "BBoxEnable", "False");
-                            ini.WriteValue("Hacks", "SkipDuplicateXFBs", "True");
-                            ini.WriteValue("Hacks", "XFBToTextureEnable", "True");
-                            ini.WriteValue("Enhancements", "ArbitraryMipmapDetection", "True");
-                            ini.WriteValue("Enhancements", "DisableCopyFilter", "True");
-                            ini.WriteValue("Enhancements", "ForceTrueColor", "True");
-                        }
-                        else
-                        {
-                            ini.Remove("Hacks", "BBoxEnable");
-                            ini.Remove("Hacks", "SkipDuplicateXFBs");
-                            ini.Remove("Hacks", "XFBToTextureEnable");
-                            ini.Remove("Enhancements", "ArbitraryMipmapDetection");
-                            ini.Remove("Enhancements", "DisableCopyFilter");
-                            ini.Remove("Enhancements", "ForceTrueColor");
-                        }
+                        ini.WriteValue("Hacks", "BBoxEnable", "False");
+                        ini.WriteValue("Hacks", "SkipDuplicateXFBs", "True");
+                        ini.WriteValue("Hacks", "XFBToTextureEnable", "True");
+                        ini.WriteValue("Enhancements", "ArbitraryMipmapDetection", "True");
+                        ini.WriteValue("Enhancements", "DisableCopyFilter", "True");
+                        ini.WriteValue("Enhancements", "ForceTrueColor", "True");
+                    }
+                    else
+                    {
+                        ini.Remove("Hacks", "BBoxEnable");
+                        ini.Remove("Hacks", "SkipDuplicateXFBs");
+                        ini.Remove("Hacks", "XFBToTextureEnable");
+                        ini.Remove("Enhancements", "ArbitraryMipmapDetection");
+                        ini.Remove("Enhancements", "DisableCopyFilter");
+                        ini.Remove("Enhancements", "ForceTrueColor");
                     }
 
                     BindBoolIniFeatureOn(ini, "Hacks", "XFBToTextureEnable", "dolphin_xfbtotexture", "True", "False");
@@ -315,9 +309,9 @@ namespace EmulatorLauncher
                     BindBoolIniFeature(ini, "Hacks", "FastTextureSampling", "manual_texture_sampling", "False", "True");
                     BindBoolIniFeature(ini, "Settings", "WaitForShadersBeforeStarting", "WaitForShadersBeforeStarting", "True", "False");
                     BindIniFeature(ini, "Settings", "ShaderCompilationMode", "ShaderCompilationMode", "2");
-                    BindBoolIniFeature(ini, "Hacks", "EFBAccessEnable", "EFBAccessEnable", "False", "True");
+                    BindBoolIniFeatureOn(ini, "Hacks", "EFBAccessEnable", "EFBAccessEnable", "False", "True");
                     BindBoolIniFeatureOn(ini, "Hacks", "EFBScaledCopy", "EFBScaledCopy", "True", "False");
-                    BindBoolIniFeature(ini, "Hacks", "EFBEmulateFormatChanges", "EFBEmulateFormatChanges", "True", "False");
+                    BindBoolIniFeature(ini, "Hacks", "EFBEmulateFormatChanges", "EFBEmulateFormatChanges", "False", "True");
                     BindIniFeature(ini, "Enhancements", "MaxAnisotropy", "anisotropic_filtering", "-1");
                     BindBoolIniFeature(ini, "Settings", "SSAA", "ssaa", "True", "False");
                     BindBoolIniFeature(ini, "Settings", "Crop", "dolphin_crop", "True", "False");
@@ -352,6 +346,7 @@ namespace EmulatorLauncher
                         ini.WriteValue("Achievements", "DiscordPresenceEnabled", SystemConfig.getOptBoolean("retroachievements.richpresence") ? "True" : "False");
                         ini.WriteValue("Achievements", "ProgressEnabled", SystemConfig.getOptBoolean("retroachievements.challenge_indicators") ? "True" : "False");
                         ini.WriteValue("Achievements", "UnofficialEnabled", SystemConfig.getOptBoolean("retroachievements.unofficial") ? "True" : "False");
+                        ini.WriteValue("Achievements", "LeaderboardTrackerEnabled", SystemConfig.getOptBoolean("retroachievements.leaderboards") ? "True" : "False");
 
                         // Inject credentials
                         if (SystemConfig.isOptSet("retroachievements.username") && SystemConfig.isOptSet("retroachievements.token"))
@@ -599,7 +594,7 @@ namespace EmulatorLauncher
                     BindIniFeature(ini, "DSP", "Backend", "dolphin_audiobackend", "Cubeb");
 
                     // Video backend - Default
-                    BindIniFeature(ini, "Core", "GFXBackend", "dolphin_gfxbackend", "Vulkan");
+                    BindIniFeature(ini, "Core", "GFXBackend", "dolphin_gfxbackend", "D3D");
 
                     // Cheats - default false
                     if (!_crediar)
@@ -715,10 +710,13 @@ namespace EmulatorLauncher
                             ini.WriteValue("Core", "GCIFolderAPath", gcSavePath);
                             ini.WriteValue("Core", "MemcardAPath", sramFile);
                         }
-
-                        if (SystemConfig.getOptBoolean("dolphin_microphone"))
-                            ini.WriteValue("Core", "SlotB", "4");
                     }
+
+                    // Microphone in slot B - remove it when it was set by a previous session, keep any other user choice
+                    if (!_triforce && SystemConfig.getOptBoolean("dolphin_microphone"))
+                        ini.WriteValue("Core", "SlotB", "4");
+                    else if (ini.GetValue("Core", "SlotB") == "4")
+                        ini.WriteValue("Core", "SlotB", "255");
 
                     // Add rom path to isopath
                     AddPathToIsoPath(Path.GetFullPath(Path.GetDirectoryName(rom)), ini);
@@ -780,8 +778,11 @@ namespace EmulatorLauncher
                         ini.WriteValue("Core", "SIDevice3", "0");
                         ini.WriteValue("Interface", "UsePanicHandlers", "False");       // Disable panic handlers
                         ini.WriteValue("Core", "EnableCheats", "True");                 // Cheats must be enabled
+
+                        if (!_crediar)
+                            CopySegaBoot(path);
                     }
-                    else
+                    else if (ini.GetValue("Core", "SerialPort1") == "6")
                         ini.WriteValue("Core", "SerialPort1", "255");
 
                     // Bluetooth passthrough
@@ -796,7 +797,7 @@ namespace EmulatorLauncher
                     // SDL hints
                     BindBoolIniFeature(ini, "SDL_Hints", "SDL_JOYSTICK_DIRECTINPUT", "input_sdldinput", "1", "0");
 
-                    DolphinControllers.WriteControllersConfig(path, ini, system, emulator, rom, _triforce, _crediar, triforceGame, region, out _sindenSoft);
+                    DolphinControllers.WriteControllersConfig(path, ini, system, emulator, rom, _triforce, _crediar, triforceGame, region);
 
                     ini.Save();
                 }
@@ -1042,6 +1043,45 @@ namespace EmulatorLauncher
             return ret;
         }
 
+        // Upstream Dolphin needs SegaBoot (User/Triforce/segaboot.gcm) for the Triforce test menu.
+        // The file cannot be shipped: copy it from the RetroBat bios folder when the user provides it.
+        private void CopySegaBoot(string path)
+        {
+            string target = Path.Combine(path, "User", "Triforce", "segaboot.gcm");
+
+            string[] candidates = new string[]
+            {
+                Path.Combine(AppConfig.GetFullPath("bios"), "triforce", "segaboot.gcm"),
+                Path.Combine(AppConfig.GetFullPath("bios"), "segaboot.gcm")
+            };
+
+            string source = candidates.FirstOrDefault(f => File.Exists(f));
+            if (source == null)
+            {
+                if (!File.Exists(target))
+                    SimpleLogger.Instance.Warning("[WARNING] Triforce: segaboot.gcm not found in bios\\triforce, test menu will not be available.");
+                return;
+            }
+
+            try
+            {
+                var src = new FileInfo(source);
+                var dst = new FileInfo(target);
+
+                // Skip if already up to date (File.Copy keeps the source timestamp)
+                if (dst.Exists && dst.Length == src.Length && dst.LastWriteTimeUtc >= src.LastWriteTimeUtc)
+                    return;
+
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.Copy(source, target, true);
+                SimpleLogger.Instance.Info("[INFO] Triforce: copied " + source + " to " + target);
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Instance.Error("[ERROR] Triforce: unable to copy segaboot.gcm: " + ex.Message);
+            }
+        }
+
         private void ApplyPatches(IniFile ini, string gameID)
         {
             string patchFile = Path.Combine(Program.AppConfig.GetFullPath("retrobat"), "system", "tools", "triforce_patches.json");
@@ -1054,10 +1094,10 @@ namespace EmulatorLauncher
                 string jsonText = File.ReadAllText(patchFile);
                 List<GamePatches> games = JsonConvert.DeserializeObject<List<GamePatches>>(jsonText);
 
-                var game = games.FirstOrDefault(g => g.GameId.Equals(gameID, StringComparison.OrdinalIgnoreCase));
+                var game = games.FirstOrDefault(g => g.GameId.Split(',').Any(id => id.Trim().Equals(gameID, StringComparison.OrdinalIgnoreCase)));
                 if (game == null && _crediar)
                 {
-                    game = games.FirstOrDefault(g => g.GameIdCrediar.Equals(gameID, StringComparison.OrdinalIgnoreCase));
+                    game = games.FirstOrDefault(g => g.GameIdCrediar.Split(',').Any(id => id.Trim().Equals(gameID, StringComparison.OrdinalIgnoreCase)));
                 }
 
                 if (game == null)
@@ -1091,7 +1131,7 @@ namespace EmulatorLauncher
                     }
 
                     // Disable patch if not enabled in features
-                    if (SystemConfig.isOptSet(featureName) && !SystemConfig.getOptBoolean(featureName))
+                    if ((SystemConfig.isOptSet(featureName) && !SystemConfig.getOptBoolean(featureName) || !SystemConfig.isOptSet(featureName)))
                     {
                         ini.Remove(enableSection, patch.PatchName);
                         SimpleLogger.Instance.Info($"[INFO] Patch {patch.PatchName} has been disabled for game {gameID}");
@@ -1113,22 +1153,13 @@ namespace EmulatorLauncher
             catch { SimpleLogger.Instance.Error($"[ERROR] Failed to load patch file : {gameID}"); }
         }
 
-        private int GetTargetMonitorIndex()
+        private Screen GetTargetScreen()
         {
+            // Pas de MonitorIndex defini : on ne gere pas le placement d'ecran.
             if (!SystemConfig.isOptSet("MonitorIndex") || string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
-                return -1;
+                return null;
 
-            int index;
-            if (!int.TryParse(SystemConfig["MonitorIndex"], out index))
-                return -1;
-
-            if (index < 0 || index >= Screen.AllScreens.Length)
-            {
-                SimpleLogger.Instance.Warning($"[SCREENMOVER] MonitorIndex {index} out of range ({Screen.AllScreens.Length} screen(s) detected), ignoring.");
-                return -1;
-            }
-
-            return index;
+            return Program.TargetScreen;
         }
 
         public override int RunAndWait(ProcessStartInfo path)
@@ -1136,13 +1167,16 @@ namespace EmulatorLauncher
             FakeBezelFrm bezel = null;
             int ret = 0;
 
-            int monitorIndex = GetTargetMonitorIndex();
+            Screen targetScreen = GetTargetScreen();
             bool guiMode = SystemConfig.getOptBoolean("dolphin_gui");
 
-            bool manageScreen = monitorIndex >= 0 && !guiMode;
+            bool manageScreen = targetScreen != null && !guiMode;
             bool needWindow = manageScreen || (_bezelFileInfo != null && !guiMode);
 
-            var process = Process.Start(path);
+            var process = StartEmulator(path);
+            if (process == null)
+                return (int)ExitCodes.CustomError;
+
             Job.Current.AddProcess(process);
 
             if (process != null)
@@ -1155,15 +1189,15 @@ namespace EmulatorLauncher
                     process.WaitForInputIdle(5000);
 
                 if (manageScreen && hWnd != IntPtr.Zero)
-                    ScreenTools.HoldWindowOnScreen(process, hWnd, monitorIndex);
+                    ScreenTools.HoldWindowOnScreen(process, hWnd, targetScreen);
 
                 ScreenTools.LogProcessWindows(process);
 
                 if (_bezelFileInfo != null)
                 {
-                    int bezelIndex = ScreenTools.GetScreenIndex(hWnd, manageScreen ? monitorIndex : -1);
-                    SimpleLogger.Instance.Info($"[BEZEL] Decorations will be shown on screen index {bezelIndex}");
-                    bezel = _bezelFileInfo.ShowFakeBezel(_resolution, false, bezelIndex);
+                    Screen bezelScreen = ScreenTools.GetScreen(hWnd, manageScreen ? targetScreen : Program.TargetScreen);
+                    SimpleLogger.Instance.Info($"[BEZEL] Decorations will be shown on {bezelScreen.DeviceName}");
+                    bezel = _bezelFileInfo.ShowFakeBezel(_resolution, false, bezelScreen);
                 }
 
                 if (hWnd == IntPtr.Zero)
@@ -1173,8 +1207,7 @@ namespace EmulatorLauncher
                     User32.SetForegroundWindow(hWnd);
 
                 process.WaitForExit();
-                try { ret = process.ExitCode; }
-                catch { }
+                ret = ReportExitCode(process, path);
             }
 
             bezel?.Dispose();
@@ -1401,19 +1434,20 @@ namespace EmulatorLauncher
         public InputKeyMapping InputProfile { get; set; }
         public List<string> GameIDs { get; private set; }
         public List<string> GameIDsCrediar { get; private set; }
+        public List<string> Codes { get; private set; }
 
         public static TriforceGame[] TriforceGames = new TriforceGame[]
         {
-                new TriforceGame() { Game = "Mario_Kart_GP", InputProfile = DolphinControllers.mkMapping, GameIDs = new List<string> { "GKPJ6E" }, GameIDsCrediar = new List<string> { "SBKP" } },
-                new TriforceGame() { Game = "Mario_Kart_GP2", InputProfile = DolphinControllers.mkMapping, GameIDs = new List<string> { "GNLJ82" }, GameIDsCrediar = new List<string> { "SBNL" } },
-                new TriforceGame() { Game = "F-ZeroAX", InputProfile = DolphinControllers.fzeroMapping, GameIDs = new List<string> { "GGGE6E" }, GameIDsCrediar = new List<string> { "SBGG" } },
-                new TriforceGame() { Game = "F-ZeroAX_Monster_Ride", InputProfile = DolphinControllers.fzeroMapping, GameIDs = new List<string> { "GHAE6E" }, GameIDsCrediar = new List<string> { "SBHA" } },
-                new TriforceGame() { Game = "Gekitou_Pro_Yakyuu", InputProfile = DolphinControllers.vs2002Mapping, GameIDs = new List<string> { "GGXJ6E" }, GameIDsCrediar = new List<string> { "SBGX" } },
-                new TriforceGame() { Game = "VS3 2002", InputProfile = DolphinControllers.vs2002Mapping, GameIDs = new List<string> { "GEYP6E" }, GameIDsCrediar = new List<string> { "SBEY" } },
-                new TriforceGame() { Game = "VS4", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GJAP6E" }, GameIDsCrediar = new List<string> { "SBJA" } },
-                new TriforceGame() { Game = "VS4_2006_JAP", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GLKJ6E" }, GameIDsCrediar = new List<string> { "SBLK" } },
-                new TriforceGame() { Game = "VS4_2006", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GLLP6E" }, GameIDsCrediar = new List<string> { "SBLL" } },
-                new TriforceGame() { Game = "Standard", InputProfile = DolphinControllers.triforceMapping, GameIDs = new List<string>(), GameIDsCrediar = new List<string>() }
+                new TriforceGame() { Game = "Mario_Kart_GP", InputProfile = DolphinControllers.mkMapping, GameIDs = new List<string> { "GKPJ6E" }, GameIDsCrediar = new List<string> { "SBKP" }, Codes = new List<string> { "KP", "KZ" } },
+                new TriforceGame() { Game = "Mario_Kart_GP2", InputProfile = DolphinControllers.mkMapping, GameIDs = new List<string> { "GNLJ82", "GNLE82" }, GameIDsCrediar = new List<string> { "SBNL" }, Codes = new List<string> { "NJ", "NL" } },
+                new TriforceGame() { Game = "F-ZeroAX", InputProfile = DolphinControllers.fzeroMapping, GameIDs = new List<string> { "GGGE6E" }, GameIDsCrediar = new List<string> { "SBGG" }, Codes = new List<string> { "GG" } },
+                new TriforceGame() { Game = "F-ZeroAX_Monster_Ride", InputProfile = DolphinControllers.fzeroMapping, GameIDs = new List<string> { "GHAE6E" }, GameIDsCrediar = new List<string> { "SBHA" }, Codes = new List<string> { "HA" } },
+                new TriforceGame() { Game = "Gekitou_Pro_Yakyuu", InputProfile = DolphinControllers.vs2002Mapping, GameIDs = new List<string> { "GGXJ6E" }, GameIDsCrediar = new List<string> { "SBGX" }, Codes = new List<string> { "GX" } },
+                new TriforceGame() { Game = "VS3 2002", InputProfile = DolphinControllers.vs2002Mapping, GameIDs = new List<string> { "GEYP6E", "GEYJ6E" }, GameIDsCrediar = new List<string> { "SBEY" }, Codes = new List<string> { "EY", "EJ", "EL", "SB", "12" } },
+                new TriforceGame() { Game = "VS4", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GJAP6E", "GHZW6E" }, GameIDsCrediar = new List<string> { "SBJA", "SBHN", "SBHZ" }, Codes = new List<string> { "JA", "JJ", "HJ", "HN", "HZ" } },
+                new TriforceGame() { Game = "VS4_2006_JAP", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GLKJ6E" }, GameIDsCrediar = new List<string> { "SBLK" }, Codes = new List<string> { "LK", "LJ" } },
+                new TriforceGame() { Game = "VS4_2006", InputProfile = DolphinControllers.vsMapping, GameIDs = new List<string> { "GLLP6E" }, GameIDsCrediar = new List<string> { "SBLL" }, Codes = new List<string> { "LL" } },
+                new TriforceGame() { Game = "Standard", InputProfile = DolphinControllers.triforceMapping, GameIDs = new List<string>(), GameIDsCrediar = new List<string>(), Codes = new List<string>() }
         };
 
         public static TriforceGame GetByGameId(string gameId, bool isTriforce)
@@ -1428,7 +1462,27 @@ namespace EmulatorLauncher
                 (g.GameIDs != null && g.GameIDs.Contains(gameId, StringComparer.OrdinalIgnoreCase)) ||
                 (g.GameIDsCrediar != null && g.GameIDsCrediar.Contains(gameId, StringComparer.OrdinalIgnoreCase)));
 
+            // Fallback on the Triforce game code, like Dolphin does (AMMediaboard.cpp), to cover other revisions/regions
+            if (game == null)
+            {
+                string code = GetTriforceCode(gameId);
+                if (code != null)
+                    game = TriforceGames.FirstOrDefault(g => g.Codes != null && g.Codes.Contains(code, StringComparer.OrdinalIgnoreCase));
+            }
+
             return game ?? TriforceGames.First(g => g.Game == "Standard");
+        }
+
+        // Triforce game code: characters 2-3 of the 6-char game ID, or the last 2 characters of the 4-char "SBxx" Crediar IDs
+        private static string GetTriforceCode(string gameId)
+        {
+            if (gameId.Length == 6)
+                return gameId.Substring(1, 2);
+
+            if (gameId.Length == 4 && gameId.StartsWith("SB", StringComparison.OrdinalIgnoreCase))
+                return gameId.Substring(2, 2);
+
+            return null;
         }
     }
 

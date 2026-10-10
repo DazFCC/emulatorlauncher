@@ -23,16 +23,19 @@ namespace EmulatorLauncher
             // the 7z filename on the website must be the first installation folder name
             { new Installer("2ship", "2ship", "2ship.exe") },
             { new Installer("altirra", "altirra", "Altirra64.exe") },
+            { new Installer("amiberry", "amiberry", "Amiberry.exe") },
             { new Installer("angle", "retroarch" ) },
             { new Installer("apple2", "applewin") },
             { new Installer("apple2gs", "gsplus") },
             { new Installer("applewin") },
+            { new Installer("arcadeduck", "arcadeduck", "ArcadeDuck.exe") },
             { new Installer("arcadeflashweb") },
             { new Installer("ares", "ares", "ares.exe") },
             { new Installer("azahar", "azahar", "azahar.exe") },
             { new Installer("bam", "fpinball", "Future Pinball.exe") },
             { new Installer("bigpemu", "bigpemu", "BigPEmu.exe") },
             { new Installer("bizhawk", "bizhawk", "EmuHawk.exe") },
+            { new Installer("blastem", "blastem", "blastem.exe") },
             { new Installer("bstone", "bstone", "bstone.exe") },
             { new Installer("bsyndrome", "bsyndrome", "bs.exe") },
             { new Installer("capriceforever", new string[] { "capriceforever", "caprice32", "caprice64" }, new string[] {"Caprice.exe", "Caprice64.exe" }) },
@@ -83,7 +86,7 @@ namespace EmulatorLauncher
             { new Installer("love") },
             { new Installer("m2emulator", "m2emulator", "emulator_multicpu.exe") },
             { new Installer("magicengine", "magicengine", "pce.exe") },
-            { new Installer("mame64", new string[] { "mame", "mame64" }, new string[] { "mame.exe", "mame64.exe", "mame32.exe" }) },
+            { new Installer("mame64", new string[] { "mame", "mame64" }, new string[] { "mame.exe", "mame64.exe", "mame32.exe" }, "700MO") },
             { new Installer("mandarine", "mandarine", "mandarine.exe") },
             { new Installer("mednafen", "mednafen") },
             { new Installer("melonds", "melonds", "melonDS.exe") },
@@ -116,7 +119,7 @@ namespace EmulatorLauncher
             { new Installer("rtcw", "rtcw", "RealRTCW.x64.exe") },
             { new Installer("ruffle", "ruffle", "ruffle.exe") },
             { new Installer("ryujinx", "ryujinx", "Ryujinx.exe") },
-            { new Installer("scummvm") },
+            { new Installer("scummvm", "scummvm", "scummvm.exe", "200MO") },
             { new Installer("shadps4", new string[] { "shadps4"}, new string[] { "shadPS4QtLauncher.exe", "shadPS4.exe" }) },
             { new Installer("simcoupe") },
             { new Installer("simple64", "simple64", "simple64-gui.exe") },
@@ -139,6 +142,7 @@ namespace EmulatorLauncher
             { new Installer("theforceengine", "theforceengine", "TheForceEngine.exe") },
             { new Installer("triforce", new string[] { "dolphin-triforce"}, new string[] { "dolphinWX.exe", "dolphin.exe" }) },
             { new Installer("tsugaru", "tsugaru", "tsugaru_cui.exe") },
+            { new Installer("uzdoom", "uzdoom", "uzdoom.exe") },
             { new Installer("vita3k", "vita3k", "Vita3K.exe") },
             { new Installer("vkquake", "vkquake", "vkQuake.exe") },
             { new Installer("vkquake2", "vkquake2", "quake2.exe") },
@@ -147,7 +151,8 @@ namespace EmulatorLauncher
             { new Installer("winuae", "winuae", "winuae64.exe") },
             { new Installer("xash3d", "xash3d", "xash3d.exe") },
             { new Installer("xbox", new string[] { "cxbx-reloaded", "cxbx-r" }, "cxbx.exe") },
-            { new Installer("xemu", "xemu") },
+            { new Installer("xemu", "xemu", "xemu.exe") },
+            { new Installer("xemu-chihiro", "xemu-chihiro", "xemu.exe") },
             { new Installer("xenia", "xenia", "xenia.exe") },
             { new Installer("xenia-canary", "xenia-canary", "xenia_canary.exe" ) },
             { new Installer("xenia-edge", "xenia-edge", "xenia_edge.exe" ) },
@@ -159,7 +164,8 @@ namespace EmulatorLauncher
             { new Installer("yuzu", "yuzu", "yuzu.exe") },
             { new Installer("yuzu-early-access", "yuzu-early-access", "yuzu.exe") },
             { new Installer("zesarux", "zesarux", "zesarux.exe") },
-            { new Installer("zinc", "zinc", "ZiNc.exe") } 
+            { new Installer("zinc", "zinc", "ZiNc.exe") },
+            { new Installer("zquestclassic", "zquestclassic", "zplayer.exe") }
         };
 
         // Some emulators do not set correctly version in executable and require specific treatment !
@@ -546,27 +552,6 @@ namespace EmulatorLauncher
                         return date;
                     }
                 }
-                else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "jzintv")
-                {
-                    var output = ProcessExtensions.RunWithOutput(exe, "-l");
-                    Match versionMatch = Regex.Match(output, @"jzIntv v(\d+\.\d+)");
-                    Match svnMatch = Regex.Match(output, @"SVN Revision (\d+)");
-
-                    if (versionMatch.Success && svnMatch.Success)
-                    {
-                        string versionjz = versionMatch.Groups[1].Value;
-                        string svn = svnMatch.Groups[1].Value;
-                        string combined = $"{versionjz}.{svn}";
-                        var finalversionjz = StringExtensions.FormatVersionString(combined);
-
-                        Version ver = new Version();
-                        if (Version.TryParse(finalversionjz, out ver))
-                        {
-                            return ver.ToString();
-                        }
-                    }
-
-                }
                 else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "flycast")
                 {
                     var output = versionInfo.FileVersion.Substring(1);
@@ -639,6 +624,45 @@ namespace EmulatorLauncher
                         return ver.ToString();
                     }
                 }
+                else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "jzintv")
+                {
+                    var output = ProcessExtensions.RunWithOutput(exe, "-l");
+                    Match versionMatch = Regex.Match(output, @"jzIntv v(\d+\.\d+)");
+                    Match svnMatch = Regex.Match(output, @"SVN Revision (\d+)");
+
+                    if (versionMatch.Success && svnMatch.Success)
+                    {
+                        string versionjz = versionMatch.Groups[1].Value;
+                        string svn = svnMatch.Groups[1].Value;
+                        string combined = $"{versionjz}.{svn}";
+                        var finalversionjz = StringExtensions.FormatVersionString(combined);
+
+                        Version ver = new Version();
+                        if (Version.TryParse(finalversionjz, out ver))
+                        {
+                            return ver.ToString();
+                        }
+                    }
+
+                }
+                else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "linuxloader")
+                {
+                    var output = ProcessExtensions.RunWithOutput(exe, "--version");
+
+                    // Expected first line: "linuxloader v3.0.11"
+                    Match llMatch = Regex.Match(output ?? string.Empty, @"linuxloader\s+v(\d+(?:\.\d+)+)", RegexOptions.IgnoreCase);
+                    if (llMatch.Success)
+                    {
+                        var llVersion = StringExtensions.FormatVersionString(llMatch.Groups[1].Value);
+
+                        Version ver = new Version();
+                        if (Version.TryParse(llVersion, out ver))
+                            return ver.ToString();
+                    }
+
+                    // Fallback: fake version number based on last write time (keeps current behavior if parsing fails)
+                    return File.GetLastWriteTime(exe).ToUniversalTime().ToString("0.yy.MM.dd");
+                }
                 else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "rmg")
                 {
                     var output = ProcessExtensions.RunWithOutput(exe, "-v");
@@ -650,15 +674,6 @@ namespace EmulatorLauncher
                         return ver.ToString();
                     }
                 }
-                /*else if (Path.GetFileNameWithoutExtension(exe).ToLower() == "play")
-                {
-                    var output = versionInfo.ProductVersion.Substring(0, 7);
-                    output = StringExtensions.FormatVersionString(output);
-
-                    Version ver = new Version();
-                    if (Version.TryParse(output, out ver))
-                        return ver.ToString();
-                }*/
                 else
                 {
                     // Fake version number based on last write time

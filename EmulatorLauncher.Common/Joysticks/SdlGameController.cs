@@ -490,6 +490,7 @@ namespace EmulatorLauncher.Common.Joysticks
 
         private static List<Sdl3GameController> _controllers;
         private static bool _standardHints = false;
+        private static Sdl3HintProfile _hintProfile = Sdl3HintProfile.RetroBat;
 
         public static List<Sdl3GameController> GetControllers()
         {
@@ -541,24 +542,52 @@ namespace EmulatorLauncher.Common.Joysticks
             }
         }
 
+        /// <summary>
+        /// SDL 3.4 moved some controllers to new backends (HIDAPI 8BitDo, Flydigi, SInput, ZUIKI, GameInput raw instruments),
+        /// which changes their GUID, name and enumeration order. Disabling them keeps the SDL 3.2 view of these devices,
+        /// matching emulators that still ship SDL 3.2. SDL 3.2 ignores these unknown hints.
+        /// </summary>
+        private static void DisableSdl34Drivers()
+        {
+            SDL_SetHint("SDL_JOYSTICK_HIDAPI_8BITDO", "0");
+            SDL_SetHint("SDL_JOYSTICK_HIDAPI_FLYDIGI", "0");
+            SDL_SetHint("SDL_JOYSTICK_HIDAPI_SINPUT", "0");
+            SDL_SetHint("SDL_JOYSTICK_HIDAPI_ZUIKI", "0");
+            SDL_SetHint("SDL_JOYSTICK_GAMEINPUT_RAW", "0");
+        }
+
+
         public static bool ListJoysticks(out List<Sdl3GameController> controllers)
         {
             controllers = new List<Sdl3GameController>();
             try
             {
-                if (_standardHints)
+                switch (_hintProfile)
                 {
-                    SDL_SetHint("SDL_JOYSTICK_HIDAPI", "0");
-                    SDL_SetHint("SDL_JOYSTICK_RAWINPUT", "0");
-                    SDL_SetHint("SDL_JOYSTICK_ENHANCED_REPORTS", "0");
-                    SDL_SetHint("SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS", "1");
-                }
-                else
-                {
-                    SDL_SetHint("SDL_JOYSTICK_HIDAPI", "1");
-                    SDL_SetHint("SDL_JOYSTICK_RAWINPUT", "1");
-                    SDL_SetHint("SDL_JOYSTICK_ENHANCED_REPORTS", "0");
-                    SDL_SetHint("SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS", "1");
+                    case Sdl3HintProfile.Sdl3Default:
+                        // (HIDAPI=1, RAWINPUT=0, ENHANCED_REPORTS=1, COMBINE_JOY_CONS=1),
+                        break;
+
+                    case Sdl3HintProfile.OpenGoal:
+                        // Same hint as gk.exe on Windows (input_manager.cpp), everything else left to SDL3 defaults
+                        SDL_SetHint("SDL_JOYSTICK_HIDAPI_PS3_SIXAXIS_DRIVER", "1");
+                        break;
+
+                    case Sdl3HintProfile.Legacy:
+                        SDL_SetHint("SDL_JOYSTICK_HIDAPI", "0");
+                        SDL_SetHint("SDL_JOYSTICK_RAWINPUT", "0");
+                        SDL_SetHint("SDL_JOYSTICK_ENHANCED_REPORTS", "0");
+                        SDL_SetHint("SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS", "1");
+                        DisableSdl34Drivers();
+                        break;
+
+                    default:
+                        SDL_SetHint("SDL_JOYSTICK_HIDAPI", "1");
+                        SDL_SetHint("SDL_JOYSTICK_RAWINPUT", "1");
+                        SDL_SetHint("SDL_JOYSTICK_ENHANCED_REPORTS", "0");
+                        SDL_SetHint("SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS", "1");
+                        DisableSdl34Drivers();
+                        break;
                 }
 
                 if (!SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER))
@@ -673,15 +702,22 @@ namespace EmulatorLauncher.Common.Joysticks
         /// their device list — and therefore their gamepad indices — will not match ours.
         /// Must be called before any SDL3 controller is resolved.
         /// </summary>
-        public static void SetEnumerationHints(bool useRetroBatHints = true)
+        public static void SetEnumerationHints(Sdl3HintProfile profile)
         {
             if (_controllers != null)
             {
                 SimpleLogger.Instance.Warning("[Sdl3GameController] Enumeration hints changed after controllers were enumerated - ignored.");
                 return;
             }
+            _hintProfile = profile;
+        }
 
-            _standardHints = !useRetroBatHints;
+        public enum Sdl3HintProfile
+        {
+            RetroBat,       // HIDAPI=1, RAWINPUT=1  (Default RetroBat for sdl3)
+            Legacy,         // HIDAPI=0, RAWINPUT=0  (JGenesis)
+            Sdl3Default,    // native SDL3, no hint at all (Dusklight, Gopher64, any "bare" SDL3 emulator)
+            OpenGoal        // native SDL3 + HIDAPI PS3 SIXAXIS driver (OpenGOAL gk.exe)
         }
     }
 }

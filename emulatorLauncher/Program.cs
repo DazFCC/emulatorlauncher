@@ -46,17 +46,20 @@ namespace EmulatorLauncher
             { "2ship", () => new Ship2Generator() },
             { "3dsen", () => new Nes3dGenerator() },
             { "altirra", () => new AltirraGenerator() },
+            { "amiberry", () => new AmiberryGenerator() },
             { "amigaforever", () => new AmigaForeverGenerator() },
             { "angle", () => new LibRetroGenerator() },
             { "apple2", () => new AppleWinGenerator() },
             { "apple2gs", () => new GsPlusGenerator() },
             { "applewin", () => new AppleWinGenerator() },
+            { "arcadeduck", () => new ArcadeDuckGenerator() },
             { "arcadeflashweb", () => new ArcadeFlashWebGenerator() },
             { "ares", () => new AresGenerator() },
             { "azahar", () => new AzaharGenerator() },
             { "bam", () => new FpinballGenerator() },
             { "bigpemu", () => new BigPEmuGenerator() },
             { "bizhawk", () => new BizhawkGenerator() },
+            { "blastem", () => new BlastemGenerator() },
             { "bstone", () => new BStoneGenerator() },
             { "bsyndrome", () => new BSyndromeGenerator() },
             { "capriceforever", () => new CapriceForeverGenerator() },
@@ -178,6 +181,7 @@ namespace EmulatorLauncher
             { "theforceengine", () => new ForceEngineGenerator() },
             { "triforce", () => new DolphinGenerator() },
             { "tsugaru", () => new TsugaruGenerator() },
+            { "uzdoom", () => new GZDoomGenerator() },
             { "vita3k", () => new Vita3kGenerator() },
             { "vkquake", () => new vkQuakeGenerator() },
             { "vkquake2", () => new vkQuake2Generator() },
@@ -189,6 +193,7 @@ namespace EmulatorLauncher
             { "xash3d", () => new Xash3DGenerator() },
             { "xbox", () => new CxbxGenerator() },
             { "xemu", () => new XEmuGenerator() },
+            { "xemu-chihiro", () => new XEmuGenerator() },
             { "xenia", () => new XeniaGenerator() },
             { "xenia-canary", () => new XeniaGenerator() },
             { "xenia-edge", () => new XeniaGenerator() },
@@ -201,12 +206,46 @@ namespace EmulatorLauncher
             { "yuzu-early-access", () => new YuzuGenerator() },
             { "zaccariapinball", () => new ZaccariaPinballGenerator() },
             { "zesarux", () => new ZEsarUXGenerator() },
-            { "zinc", () => new ZincGenerator() }
+            { "zinc", () => new ZincGenerator() },
+            { "zquestclassic", () => new ZQuestClassicGenerator() }
         };
 
         public static ConfigFile AppConfig { get; private set; }
         public static string LocalPath { get; private set; }
         public static ConfigFile SystemConfig { get; private set; }
+        
+        /// <summary>
+        /// Target screen of the game. Priority order:
+        ///   1. the MonitorIndex feature (0-based index, SDL order)
+        ///   2. the screen on which EmulationStation is running (-monitor)
+        ///   3. the primary Windows screen (default, most compatible)
+        /// </summary>
+        public static Screen TargetScreen
+        {
+            get
+            {
+                if (SystemConfig.isOptSet("MonitorIndex") && !string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
+                {
+                    int n;
+                    if (int.TryParse(SystemConfig["MonitorIndex"], out n) && n >= 0)
+                    {
+                        var s = Displays.FromIndex(n, MonitorOrder.SdlLike);
+                        if (s != null)
+                            return s;
+
+                        SimpleLogger.Instance.Warning("[Displays] MonitorIndex " + n +
+                            " out of range (" + Screen.AllScreens.Length + " screen(s)), falling back.");
+                    }
+                }
+
+                var es = Displays.FromDeviceName(EsScreenDeviceName);
+                if (es != null)
+                    return es;
+
+                return Screen.PrimaryScreen;
+            }
+        }
+        public static string EsScreenDeviceName { get; private set; }
         public static List<Controller> Controllers { get; private set; }
         public static EsFeatures Features { get; private set; }
         public static Game CurrentGame { get; private set; }
@@ -382,12 +421,38 @@ namespace EmulatorLauncher
             AppConfig.ImportOverrides(ConfigFile.FromArguments(args));
 
             SimpleLogger.Instance.Info("[Startup] Loading ES settings.");
+
+            // "-monitor N" (EmulationStation, FileData.cpp) is an SDL index.
+            // We extract the value and then remove it from the arguments before any import, so it can no longer override a user choice.
+            var cmdLine = ConfigFile.FromArguments(args);
+            if (cmdLine.isOptSet("monitor"))
+            {
+                int esMonitor;
+                if (int.TryParse(cmdLine["monitor"], out esMonitor))
+                {
+                    var esScreen = Displays.FromIndex(esMonitor, MonitorOrder.SdlLike);
+                    if (esScreen != null)
+                    {
+                        EsScreenDeviceName = esScreen.DeviceName;
+                        SimpleLogger.Instance.Info("[Displays] EmulationStation runs on sdlIndex=" +
+                            esMonitor + " -> " + EsScreenDeviceName);
+                    }
+                    else
+                        SimpleLogger.Instance.Warning("[Displays] -monitor " + esMonitor +
+                            " is out of range, ignored.");
+                }
+
+                // ConfigFile n'expose pas de Remove() : affecter une valeur vide supprime
+                // l'entree (indexeur, ConfigFile.cs:237-238, Options == null ici).
+                cmdLine["monitor"] = null;
+            }
+
             SystemConfig = ConfigFile.LoadEmulationStationSettings(Path.Combine(Program.AppConfig.GetFullPath("home"), "es_settings.cfg"));
-            SystemConfig.ImportOverrides(ConfigFile.FromArguments(args));
+            SystemConfig.ImportOverrides(cmdLine);
             SystemConfig.ImportOverrides(SystemConfig.LoadAll("global"));
             SystemConfig.ImportOverrides(SystemConfig.LoadAll(SystemConfig["system"]));
-            SystemConfig.ImportOverrides(SystemConfig.LoadAll(SystemConfig["system"] + "[\"" + Path.GetFileName(SystemConfig["rom"]).Replace("=","").Replace("#","") + "\"]"));
-            SystemConfig.ImportOverrides(ConfigFile.FromArguments(args));
+            SystemConfig.ImportOverrides(SystemConfig.LoadAll(SystemConfig["system"] + "[\"" + Path.GetFileName(SystemConfig["rom"]).Replace("=", "").Replace("#", "") + "\"]"));
+            SystemConfig.ImportOverrides(cmdLine);
 
             // Log Retrobat version && emulatorlauncher version
             string rbVersionPath = Path.Combine(Program.AppConfig.GetFullPath("retrobat"), "system", "version.info");
@@ -626,15 +691,7 @@ namespace EmulatorLauncher
             catch { SimpleLogger.Instance.Error("[Startup] Error while getting local version"); }
 
             // log screens
-            var allScreens = Screen.AllScreens;
-            if (allScreens != null && allScreens.Length > 0)
-            {
-                for (int i = 0; i < allScreens.Length; i++)
-                {
-                    var s = allScreens[i];
-                    SimpleLogger.Instance.Info($"[Generator] Screen[{i}]: L={s.Bounds.Left} T={s.Bounds.Top} W={s.Bounds.Width} H={s.Bounds.Height} Primary={s.Primary}");
-                }
-            }
+            Displays.LogAll();
 
             // Game info
             if (SystemConfig.isOptSet("gameinfo") && File.Exists(SystemConfig.GetFullPath("gameinfo")))
@@ -743,6 +800,9 @@ namespace EmulatorLauncher
 
                 using (var screenResolution = ScreenResolution.Parse(SystemConfig["videomode"]))
                 {
+                    if (screenResolution != null)
+                        screenResolution.SetTargetScreen(Program.TargetScreen);
+
                     ProcessStartInfo path = null;
 
                     try
@@ -766,6 +826,18 @@ namespace EmulatorLauncher
 
                         if (screenResolution != null && generator.DependsOnDesktopResolution)
                             screenResolution.Apply();
+
+                        // A change in display mode temporarily makes the HDMI audio endpoint (TV / amplifier) disappear.
+                        // On some configurations, the endpoint is simply not ready at launch. In both cases,
+                        // starting the emulator too early leaves it without sound.
+                        bool modeChanged = (screenResolution != null && screenResolution.HasChanged);
+                        int audioTimeout = modeChanged ? 5000 : 1500;
+                        int audioWaited;
+
+                        if (!EmulatorLauncher.Common.Audio.AudioTools.WaitForRenderEndpoint(audioTimeout, out audioWaited))
+                            SimpleLogger.Instance.Warning("[Audio] No active render endpoint" + (modeChanged ? " after display mode change" : "") + " - emulator may start without sound.");
+                        else if (audioWaited > 0)
+                            SimpleLogger.Instance.Info("[Audio] Render endpoint became available after " + audioWaited + "ms.");
 
                         if (!Program.SystemConfig.isOptSet("use_guns") || !Program.SystemConfig.getOptBoolean("use_guns"))
                             Cursor.Position = new System.Drawing.Point(Screen.PrimaryScreen.Bounds.Right, Screen.PrimaryScreen.Bounds.Bottom / 2);
@@ -816,7 +888,12 @@ namespace EmulatorLauncher
                         {
                             int exitCode = generator.RunAndWait(path);
                             if (exitCode != 0 && !joy.ProcessKilled)
-                                Environment.ExitCode = (int)ExitCodes.EmulatorExitedUnexpectedly;
+                            {
+                                if (generator.ExitCode == ExitCodes.CustomError)
+                                    Environment.ExitCode = (int)ExitCodes.CustomError;
+                                else
+                                    Environment.ExitCode = (int)ExitCodes.EmulatorExitedUnexpectedly;
+                            }
 
                             joy.Dispose();
                         }
@@ -850,6 +927,10 @@ namespace EmulatorLauncher
             if (CurrentGame == null)
                 return;
 
+            // Disabled by user (global option)
+            if (SystemConfig.getOptBoolean("disable_controlcenter"))
+                return;
+
             if (emulatorsNoControlCenter.Contains(SystemConfig["emulator"]))
                 return;
 
@@ -881,29 +962,49 @@ namespace EmulatorLauncher
             string filePath = SystemConfig["rom"] + (Directory.Exists(SystemConfig["rom"]) ? "\\padto.keys" : ".keys");
 
             EvMapyKeysFile gameMapping = EvMapyKeysFile.TryLoad(filePath);
+
+            if (gameMapping != null)
+                SimpleLogger.Instance.Info("[PadToKey] Using mapping file : " + filePath);
+
             if (gameMapping == null && SystemConfig["system"] != null)
             {
                 var core = SystemConfig["core"];
                 var system = SystemConfig["system"];
 
-                string systemMapping = "";
+                var candidates = new List<string>();
+
+                string userPadToKeyPath = Program.AppConfig.GetFullPath("user");
+                if (!string.IsNullOrEmpty(userPadToKeyPath))
+                {
+                    userPadToKeyPath = Path.Combine(userPadToKeyPath, "padtokey");
+                    if (!string.IsNullOrEmpty(core))
+                        candidates.Add(Path.Combine(userPadToKeyPath, system + "." + core + ".keys"));
+                    candidates.Add(Path.Combine(userPadToKeyPath, system + ".keys"));
+                }
+
+                string esPadToKeyPath = Path.Combine(Program.LocalPath, ".emulationstation", "padtokey");
+                string systemPadToKeyPath = Program.AppConfig.GetFullPath("padtokey");
 
                 if (!string.IsNullOrEmpty(core))
                 {
-                    systemMapping = Path.Combine(Program.LocalPath, ".emulationstation", "padtokey", system + "." + core + ".keys");
-
-                    if (!File.Exists(systemMapping))
-                        systemMapping = Path.Combine(Program.AppConfig.GetFullPath("padtokey"), system + "." + core + ".keys");
+                    candidates.Add(Path.Combine(esPadToKeyPath, system + "." + core + ".keys"));
+                    if (!string.IsNullOrEmpty(systemPadToKeyPath))
+                        candidates.Add(Path.Combine(systemPadToKeyPath, system + "." + core + ".keys"));
                 }
 
-                if (!File.Exists(systemMapping))
-                    systemMapping = Path.Combine(Program.LocalPath, ".emulationstation", "padtokey", system + ".keys");
+                candidates.Add(Path.Combine(esPadToKeyPath, system + ".keys"));
+                if (!string.IsNullOrEmpty(systemPadToKeyPath))
+                    candidates.Add(Path.Combine(systemPadToKeyPath, system + ".keys"));
 
-                if (!File.Exists(systemMapping))
-                    systemMapping = Path.Combine(Program.AppConfig.GetFullPath("padtokey"), system + ".keys");
-
-                if (File.Exists(systemMapping))
-                    gameMapping = EvMapyKeysFile.TryLoad(systemMapping);
+                foreach (var candidate in candidates.Where(File.Exists))
+                {
+                    gameMapping = EvMapyKeysFile.TryLoad(candidate);
+                    if (gameMapping != null)
+                    {
+                        SimpleLogger.Instance.Info("[PadToKey] Using mapping file : " + candidate);
+                        break;
+                    }
+                }
             }
 
             if (gameMapping == null || gameMapping.All(c => c == null))

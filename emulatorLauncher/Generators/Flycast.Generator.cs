@@ -19,7 +19,6 @@ namespace EmulatorLauncher
         private bool _isArcade;
         private SaveStatesWatcher _saveStatesWatcher;
         private int _saveStateSlot;
-        private bool _sindenSoft = false;
 
         public FlycastGenerator()
         {
@@ -244,9 +243,14 @@ namespace EmulatorLauncher
                         ini.WriteValue("config", "pvr.rend", "3");
                         ini.WriteValue("config", "rend.PerStripSorting", "yes");
                     }
-                    else
+                    else if (SystemConfig["flycast_video"] == "vulkan")
                     {
                         ini.WriteValue("config", "pvr.rend", "5");
+                        ini.WriteValue("config", "rend.PerStripSorting", "yes");
+                    }
+                    else
+                    {
+                        ini.WriteValue("config", "pvr.rend", "6");
                         ini.WriteValue("config", "rend.PerStripSorting", "yes");
                     }
                 }
@@ -412,6 +416,24 @@ namespace EmulatorLauncher
             }
             catch { SimpleLogger.Instance.Warning("[SAVES] Impossible to sync vmu files between libretro and Flycast."); }
         }
+
+        private void ConfigureFlycastCrosshair(IniFile ini, bool multigun)
+        {
+            ini.WriteValue("config", "rend.CrossHairColor3", "0");
+            ini.WriteValue("config", "rend.CrossHairColor4", "0");
+
+            if (SystemConfig.getOptBoolean("flycast_crosshair"))
+            {
+                ini.WriteValue("config", "rend.CrossHairColor1", "-1073675782");
+                ini.WriteValue("config", "rend.CrossHairColor2", multigun ? "-1073547006" : "0");
+            }
+            else
+            {
+                ini.WriteValue("config", "rend.CrossHairColor1", "0");
+                ini.WriteValue("config", "rend.CrossHairColor2", "0");
+            }
+        }
+
         public override void Cleanup()
         {
             if (_saveStatesWatcher != null)
@@ -422,9 +444,6 @@ namespace EmulatorLauncher
 
             if (_demulshooter)
                 Demulshooter.KillDemulShooter();
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
 
             base.Cleanup();
         }

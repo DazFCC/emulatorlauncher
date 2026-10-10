@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using EmulatorLauncher.Common.Lightguns;
 
 namespace EmulatorLauncher
 {
@@ -20,7 +21,6 @@ namespace EmulatorLauncher
         private BezelFiles _bezelFileInfo;
         private ScreenResolution _resolution;
         private string _path;
-        private bool _sindenSoft;
         private string _romName;
 
         public override System.Diagnostics.ProcessStartInfo Generate(string system, string emulator, string core, string rom, string playersControllers, ScreenResolution resolution)
@@ -47,14 +47,19 @@ namespace EmulatorLauncher
                         FileName = exe,
                         WorkingDirectory = path,
                         Arguments = "--create controls",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                     };
 
                     using (var process = new Process())
                     {
                         process.StartInfo = linuxloaderCreateControls;
                         process.Start();
-                        process.WaitForExit(5000);
+                        process.WaitForExit(8000);
                     }
+
+                    if (!File.Exists(controlsFile))
+                        SimpleLogger.Instance.Warning("[WARNING] controls.ini was not generated in time, only the keys RetroBat writes explicitly will be present.");
                 }
                 catch { SimpleLogger.Instance.Error("[ERROR] Unable to create controls.ini file."); }
             }
@@ -70,14 +75,19 @@ namespace EmulatorLauncher
                         FileName = exe,
                         WorkingDirectory = path,
                         Arguments = "--create config",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                     };
 
                     using (var process = new Process())
                     {
                         process.StartInfo = linuxloaderCreateConfig;
                         process.Start();
-                        process.WaitForExit(5000);
+                        process.WaitForExit(8000);
                     }
+
+                    if (!File.Exists(configFile))
+                        SimpleLogger.Instance.Warning("[WARNING] linuxloader.ini was not generated in time, only the keys RetroBat writes explicitly will be present.");
                 }
                 catch { SimpleLogger.Instance.Error("[ERROR] Unable to create linuxloader.ini file."); }
             }
@@ -93,7 +103,29 @@ namespace EmulatorLauncher
 
             bool fullscreen = ShouldRunFullscreen();
 
-            // Bezels
+            // Bezels : Lindbergh games are mostly 16:9
+            // AUTO ==> no decoration.
+            string llBezel = SystemConfig.isOptSet("bezel") ? SystemConfig["bezel"] : null;
+            bool bezelSelected = !string.IsNullOrEmpty(llBezel)
+                && !llBezel.Equals("auto", StringComparison.InvariantCultureIgnoreCase)
+                && !llBezel.Equals("none", StringComparison.InvariantCultureIgnoreCase);
+
+            if (!bezelSelected)
+            {
+                // "forceNoBezel" rather than bezel="none" : linuxloader has its own Sinden border
+                SystemConfig["forceNoBezel"] = "1";
+
+                if (SystemConfig.getOptBoolean("use_guns")
+                    && !SystemConfig.isOptSet("ll_sindenborder")
+                    && RawLightgun.IsSindenLightGunConnected())
+                {
+                    SystemConfig["ll_sindenborder"] = "true";
+                    SimpleLogger.Instance.Info("[GUNS] Sinden detected : enabling linuxloader native white border.");
+                }
+
+                SimpleLogger.Instance.Info("[GENERATOR] No decoration selected : bezels disabled for linuxloader.");
+            }
+
             if (fullscreen)
             {
                 if (!ReshadeManager.Setup(ReshadeBezelType.opengl, ReshadePlatform.x86, system, rom, path, resolution, emulator))
@@ -111,19 +143,18 @@ namespace EmulatorLauncher
                 commandArray.Add("\"" + configFile + "\"");
             }
 
-            if (File.Exists(controlsFile) && !Program.SystemConfig.getOptBoolean("disableautocontrollers"))
+            string customControls = SystemConfig.isOptSet("ll_controlconfig") ? SystemConfig["ll_controlconfig"] : null;
+
+            if (!string.IsNullOrEmpty(customControls) && File.Exists(customControls))
             {
                 commandArray.Add("-o");
-                commandArray.Add("\"" + controlsFile + "\"");
+                commandArray.Add("\"" + customControls + "\"");
             }
-            else if (SystemConfig.isOptSet("ll_controlconfig") && !string.IsNullOrEmpty(SystemConfig["ll_controlconfig"]))
+            else if (File.Exists(controlsFile) && !Program.SystemConfig.getOptBoolean("disableautocontrollers"))
             {
-                string customControls = SystemConfig["ll_controlconfig"];
-                if (File.Exists(customControls))
-                {
-                    commandArray.Add("-o");
-                    commandArray.Add("\"" + customControls + "\"");
-                }
+
+                commandArray.Add("-o");
+                commandArray.Add("\"" + controlsFile + "\"");
             }
 
             string controllerDBFile = Path.Combine(path, "gamecontrollerdb.txt");
@@ -201,6 +232,16 @@ namespace EmulatorLauncher
 
                     BindBoolIniFeatureOn(ini, "Display", "KEEP_ASPECT_RATIO", "ll_keepratio", "true", "false");
                     BindBoolIniFeatureOn(ini, "Display", "HIDE_CURSOR", "ll_hide_cursor", "true", "false");
+                    BindBoolIniFeatureOn(ini, "Display", "FPS_LIMITER_ENABLED", "ll_fpsLimiter", "true", "false");
+                    if (SystemConfig.isOptSet("ll_fpstarget") && !string.IsNullOrEmpty(SystemConfig["ll_fpstarget"]))
+                        ini.WriteValue("Display", "FPS_TARGET", SystemConfig["ll_fpstarget"]);
+                    BindBoolIniFeatureOn(ini, "Display", "BOOST_RENDER_RES", "ll_boostrender", "true", "false");
+                    BindBoolIniFeature(ini, "Display", "FPS_OVERLAY_ENABLED", "ll_showfps", "true", "false");
+                    
+                    if (SystemConfig.isOptSet("ll_cpufreq") && !string.IsNullOrEmpty(SystemConfig["ll_cpufreq"]))
+                        ini.WriteValue("GameSpecific", "CPU_FREQ_GHZ", SystemConfig["ll_cpufreq"]);
+                    else
+                        ini.WriteValue("GameSpecific", "CPU_FREQ_GHZ", "0.0");
 
                     if (SystemConfig.getOptBoolean("ll_sindenborder"))
                     {
@@ -230,23 +271,43 @@ namespace EmulatorLauncher
                         ini.WriteValue("CrossHairs", "GSEVO_CROSSHAIR_ALWAYS_ON", "false");
                         ini.WriteValue("CrossHairs", "GSEVO_CROSSHAIR_ALWAYS_OFF", "true");
                     }
+                    // P2 crosshair : no default template is assumed for P2 (unlike cross1.png for P1),
+                    // only written when the user explicitly provides one via ll_crosshair2
+                    if (SystemConfig.getOptBoolean("ll_crosshair") && SystemConfig.isOptSet("ll_crosshair2") && !string.IsNullOrEmpty(SystemConfig["ll_crosshair2"]) && File.Exists(SystemConfig["ll_crosshair2"]))
+                        ini.WriteValue("CrossHairs", "P2_CROSSHAIR_PATH", "\"" + SystemConfig["ll_crosshair2"] + "\"");
+                    else
+                        ini.WriteValue("CrossHairs", "P2_CROSSHAIR_PATH", "\"\"");
 
                     // crosshairs
                     string cross1Path = Path.Combine(_path, "cross", "cross1.png");
-                    if (SystemConfig.isOptSet("ll_crosshair1") && !string.IsNullOrEmpty(SystemConfig["ll_crosshair1"]))
-                        cross1Path = SystemConfig["ll_crosshair1"];                        
-
                     if (!File.Exists(cross1Path))
                     {
                         string templateCross1 = Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "templates", "crosshairs", "cross1.png");
                         if (File.Exists(templateCross1))
-                            try { File.Copy(templateCross1, cross1Path); } catch { }
+                        {
+                            try
+                            {
+                                Directory.CreateDirectory(Path.GetDirectoryName(cross1Path));
+                                File.Copy(templateCross1, cross1Path);
+                            }
+                            catch { SimpleLogger.Instance.Warning("[GUNS] Unable to provision default crosshair."); }
+                        }
                     }
 
-                    if (SystemConfig.getOptBoolean("ll_crosshair"))
+                    if (SystemConfig.isOptSet("ll_crosshair1") && !string.IsNullOrEmpty(SystemConfig["ll_crosshair1"]) && File.Exists(SystemConfig["ll_crosshair1"]))
+                        cross1Path = SystemConfig["ll_crosshair1"];
+
+                    if (SystemConfig.getOptBoolean("ll_crosshair") && File.Exists(cross1Path))
                         ini.WriteValue("CrossHairs", "P1_CROSSHAIR_PATH", "\"" + cross1Path + "\"");
                     else
                         ini.WriteValue("CrossHairs", "P1_CROSSHAIR_PATH", "\"\"");
+
+                    // Game fixes
+                    BindBoolIniFeature(ini, "Graphics", "HUMMER_FLICKER_FIX", "ll_hummer_flicker_fix", "true", "false");
+                    BindIniFeature(ini, "GameSpecific", "PRIMEVAL_HUNT_SCREEN_MODE", "ll_primeval_hunt_screen_mode", "2");
+                    BindBoolIniFeatureOn(ini, "GameSpecific", "PRIMEVAL_HUNT_USE_ZINK", "ll_primeval_hunt_use_zink", "true", "false");
+                    BindBoolIniFeature(ini, "GameSpecific", "SKIP_OUTRUN_CABINET_CHECK", "ll_skip_outrun_cabinet_check", "true", "false");
+                    BindBoolIniFeature(ini, "GameSpecific", "RAMBO_GUNS_SWITCH", "ll_rambo_guns_switch", "true", "false");
                 }
             }
             catch { SimpleLogger.Instance.Error("[ERROR] Unable to save config ini file."); }
@@ -287,9 +348,6 @@ namespace EmulatorLauncher
 
             if (_demulshooter)
                 Demulshooter.KillDemulShooter();
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
         }
 
         public static Dictionary<string, string> ParseLauncherPaths(string ymlPath)

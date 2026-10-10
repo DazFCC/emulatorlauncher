@@ -26,8 +26,6 @@ namespace EmulatorLauncher
         private string _path;
         private SaveStatesWatcher _saveStatesWatcher;
         private int _saveStateSlot;
-        private bool _sindenSoft;
-
         private static readonly List<string> preferredRomExtensions = new List<string>() { ".bin", ".cue", ".img", ".iso", ".rom" };
         private static readonly List<string> zipSystems = new List<string>() { "3ds", "psx", "saturn", "n64", "n64dd", "pcenginecd", "turbografxcd", "jaguarcd", "vectrex", "odyssey2", "uzebox" };
         private static readonly List<string> _mdSystems = new List<string>() { "genesis", "mega32x", "megacd", "megadrive", "sega32x", "segacd" };
@@ -62,14 +60,14 @@ namespace EmulatorLauncher
             if (Path.GetExtension(rom) == ".chd")
                 throw new ApplicationException("Extension CHD not compatible with Bizhawk");
             
-            if (Path.GetExtension(rom) == ".m3u")
+            /*if (Path.GetExtension(rom) == ".m3u")
             {
                 string tempRom = File.ReadAllLines(rom).FirstOrDefault();
                 if (File.Exists(tempRom))
                     rom = tempRom;
                 else
                     rom = Path.Combine(Path.GetDirectoryName(rom), tempRom);
-            }
+            }*/
 
             if (Program.HasEsSaveStates && Program.EsSaveStates.IsEmulatorSupported(emulator))
             {
@@ -776,9 +774,6 @@ namespace EmulatorLauncher
                 _saveStatesWatcher.Dispose();
                 _saveStatesWatcher = null;
             }
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
 
             base.Cleanup();
         }

@@ -415,16 +415,36 @@ namespace EmulatorLauncher
             GenerateControllerConfig_wii(path, wiiMapping, wiiReverseAxes, extraOptions, extraMapping);
         }
 
+        /// <summary>
+        /// Get the number of Wiimote slots to enable in Dolphin.
+        /// When the feature is not set (AUTO), all 4 slots are managed as before.
+        /// </summary>
+        private static int GetWiimoteCount()
+        {
+            if (Program.SystemConfig.isOptSet("wii_nbwiimotes") && !string.IsNullOrEmpty(Program.SystemConfig["wii_nbwiimotes"]))
+            {
+                int nb = Program.SystemConfig["wii_nbwiimotes"].ToInteger();
+
+                if (nb > 0 && nb < 5)
+                    return nb;
+            }
+
+            return 4;
+        }
+
         private static void GenerateControllerConfig_realwiimotes(string path)
         {
             string iniFile = Path.Combine(path, "User", "Config", "WiimoteNew.ini");
+            int maxWiimotes = GetWiimoteCount();
 
             using (IniFile ini = new IniFile(iniFile, IniOptions.UseSpaces))
             {
                 for (int i = 1; i < 5; i++)
                 {
                     ini.ClearSection("Wiimote" + i.ToString());
-                    ini.WriteValue("Wiimote" + i.ToString(), "Source", "2");
+
+                    // Slots above the requested amount are disabled, so that games do not detect extra players
+                    ini.WriteValue("Wiimote" + i.ToString(), "Source", i <= maxWiimotes ? "2" : "0");
                 }
 
                 // Balance board
@@ -443,6 +463,8 @@ namespace EmulatorLauncher
         {
             string iniFile = Path.Combine(path, "User", "Config", "WiimoteNew.ini");
 
+            int maxWiimotes = GetWiimoteCount();
+
             using (IniFile ini = new IniFile(iniFile, IniOptions.UseSpaces))
             {
                 for (int i = 1; i < 5; i++)
@@ -451,6 +473,13 @@ namespace EmulatorLauncher
                     string btDevice = (i - 1).ToString();
 
                     ini.ClearSection(section);
+
+                    if (i > maxWiimotes)
+                    {
+                        ini.WriteValue(section, "Source", "0");
+                        continue;
+                    }
+
                     ini.WriteValue(section, "Source", "1");
                     ini.WriteValue(section, "Device", "Bluetooth/" + btDevice + "/Wii Remote");
 
@@ -497,9 +526,12 @@ namespace EmulatorLauncher
             Dictionary<string, string> specialHK = null;
             SdlToDirectInput sdlCtrl = null;
 
+            int maxWiimotes = GetWiimoteCount();
+            List<int> configuredWiimotes = new List<int>();
+
             using (IniFile ini = new IniFile(iniFile, IniOptions.UseSpaces))
             {
-                foreach (var pad in Program.Controllers.OrderBy(i => i.PlayerIndex).Take(4))
+                foreach (var pad in Program.Controllers.OrderBy(i => i.PlayerIndex).Take(maxWiimotes))
                 {
                     bool xinputAsSdl = false;
                     bool isNintendo = pad.VendorID == USB_VENDOR.NINTENDO;
@@ -509,6 +541,8 @@ namespace EmulatorLauncher
 
                     if (pad.Config == null)
                         continue;
+
+                    configuredWiimotes.Add(pad.PlayerIndex);
 
                     string guid = pad.GetSdlGuid(SdlVersion.SDL2_0_X).ToLowerInvariant();
                     var prod = pad.ProductID;
@@ -528,7 +562,7 @@ namespace EmulatorLauncher
                     }
 
                     string tech = "XInput";
-                    string deviceName = "Gamepad";
+                    string deviceName = GetXInputDeviceName(pad);
                     int xIndex = 0;
 
                     if (pad.Config.Type == "keyboard")
@@ -622,24 +656,29 @@ namespace EmulatorLauncher
                     bool revertXY = Program.Features.IsSupported("gamecube_buttons") && Program.SystemConfig.isOptSet("gamecube_buttons") && Program.SystemConfig["gamecube_buttons"] == "reverse_ab";
                     bool rumble = !Program.SystemConfig.isOptSet("input_rumble") || Program.SystemConfig.getOptBoolean("input_rumble");
 
-                    if (isNintendo && pad.PlayerIndex == 1)
+                    // Nintendo controllers: swap A/B and X/Y on a per-pad copy so other players are not affected
+                    InputKeyMapping padMapping = anyMapping;
+
+                    if (isNintendo)
                     {
                         string tempMapA = anyMapping[InputKey.a];
                         string tempMapB = anyMapping[InputKey.b];
                         string tempMapX = anyMapping[InputKey.x];
                         string tempMapY = anyMapping[InputKey.y];
 
+                        padMapping = new InputKeyMapping(anyMapping);
+
                         if (tempMapB != null)
-                            anyMapping[InputKey.a] = tempMapB;
+                            padMapping[InputKey.a] = tempMapB;
                         if (tempMapA != null)
-                            anyMapping[InputKey.b] = tempMapA;
+                            padMapping[InputKey.b] = tempMapA;
                         if (tempMapY != null)
-                            anyMapping[InputKey.x] = tempMapY;
+                            padMapping[InputKey.x] = tempMapY;
                         if (tempMapX != null)
-                            anyMapping[InputKey.y] = tempMapX;
+                            padMapping[InputKey.y] = tempMapX;
                     }
 
-                    foreach (var x in anyMapping)
+                    foreach (var x in padMapping)
                     {
                         string value = x.Value;
 
@@ -995,13 +1034,27 @@ namespace EmulatorLauncher
                     else
                         ini.WriteValue(gcpad, "IR/Auto-Hide", "False");
 
-                    // Relative input for IR cursor
-                    if (Program.SystemConfig.getOptBoolean("wii_relativecursor") || pad.Config.Type == "keyboard")
+                    // Relative input for IR cursor - default on (the pointer stays in place when the stick is released)
+                    // Turning it off centers the pointer when the stick is released. Keyboard uses the mouse (absolute).
+                    bool relativeCursor = !Program.SystemConfig.isOptSet("wii_relativecursor") || Program.SystemConfig.getOptBoolean("wii_relativecursor");
+                    
+                    if (!relativeCursor || pad.Config.Type == "keyboard")
                         ini.WriteValue(gcpad, "IR/Relative Input", "False");
                     else
                         ini.WriteValue(gcpad, "IR/Relative Input", "True");
 
                     SimpleLogger.Instance.Info("[INFO] Assigned controller " + pad.DevicePath + " to player : " + pad.PlayerIndex.ToString());
+                }
+
+                // Disable all the Wiimote slots that have not been configured, so that games do not detect extra players
+                // This is also required because WiimoteNew.ini is persistent : a slot left over from a previous session would stay active
+                for (int i = 1; i < 5; i++)
+                {
+                    if (configuredWiimotes.Contains(i))
+                        continue;
+
+                    ini.ClearSection("Wiimote" + i.ToString());
+                    ini.WriteValue("Wiimote" + i.ToString(), "Source", "0");
                 }
 
                 ini.Save();
@@ -1041,7 +1094,7 @@ namespace EmulatorLauncher
             { "Drums/Stick/Modifier/Range", "50." },
             { "Turntable/Stick/Modifier/Range", "50." },
             { "uDraw/Stylus/Modifier/Range", "50." },
-            { "Drawsome/Stylus/Modifier/Rangee", "50." },
+            { "Drawsome/Stylus/Modifier/Range", "50." },
             { "Buttons/A", "`A`" },
             { "Buttons/B", "`B`" },
             { "Buttons/1", "`1`" },

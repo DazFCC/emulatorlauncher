@@ -10,10 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Windows.Controls;
-using System.Windows.Forms;
 using System.Xml.Linq;
-using TeknoParrotUi.Common;
 using static EmulatorLauncher.Mame64Generator;
 using static EmulatorLauncher.PadToKeyboard.SendKey;
 
@@ -40,7 +37,9 @@ namespace EmulatorLauncher.Libretro
                 { "a5200", "a5200" },
                 { "advanced_tests", "Advanced Test" },
                 { "amiarcadia", "AmiArcadia" },
+                { "amiberry", "Amiberry" },
                 { "anarch", "anarch" },
+                { "applewin", "AppleWin" },
                 { "ardens", "Ardens" },
                 { "arduous", "arduous" },
                 { "atari800", "Atari800" },
@@ -66,6 +65,7 @@ namespace EmulatorLauncher.Libretro
                 { "cannonball", "Cannonball" },
                 { "cap32", "cap32" },
                 { "cdi2015", "Philips CDi 2015" },
+                { "cemu", "Cemu" },
                 { "chailove", "ChaiLove" },
                 { "citra2018", "Citra 2018" },
                 { "citra_canary", "Citra Canary/Experimental" },
@@ -300,6 +300,7 @@ namespace EmulatorLauncher.Libretro
                 { "yabasanshiro", "YabaSanshiro" },
                 { "yabause", "Yabause" },
                 { "ymir", "Emir" },
+                { "zc255", "Zelda Classic 2.55 Prototype" },
             };
 
             if (coreNames.TryGetValue(core, out string ret))
@@ -361,6 +362,8 @@ namespace EmulatorLauncher.Libretro
             Configure81(retroarchConfig, coreSettings, system, core);
             Configurea5200(retroarchConfig, coreSettings, system, core);
             ConfigureamiArcadia(retroarchConfig, coreSettings, system, core);
+            Configureamiberry(retroarchConfig, coreSettings, system, core);
+            ConfigureApplewin(retroarchConfig, coreSettings, system, core);
             ConfigureAtari800(retroarchConfig, coreSettings, system, core);
             ConfigureAzahar(retroarchConfig, coreSettings, system, core);
             ConfigureB2(retroarchConfig, coreSettings, system, core);
@@ -372,6 +375,7 @@ namespace EmulatorLauncher.Libretro
             Configurebsnesjg(retroarchConfig, coreSettings, system, core);
             ConfigureCannonball(retroarchConfig, coreSettings, system, core);
             ConfigureCap32(retroarchConfig, coreSettings, system, core);
+            ConfigureCemu(retroarchConfig, coreSettings, system, core);
             ConfigureCitra(retroarchConfig, coreSettings, system, core);
             ConfigureCraft(retroarchConfig, coreSettings, system, core);
             ConfigureCrocoDS(retroarchConfig, coreSettings, system, core);
@@ -479,6 +483,7 @@ namespace EmulatorLauncher.Libretro
             ConfigureYabause(retroarchConfig, coreSettings, system, core);
             ConfigureYabasanshiro(retroarchConfig, coreSettings, system, core);
             ConfigureYmir(retroarchConfig, coreSettings, system, core);
+            ConfigureZc255(retroarchConfig, coreSettings, system, core);
 
             if (coreSettings.IsDirty)
                 coreSettings.Save(Path.Combine(RetroarchPath, "retroarch-core-options.cfg"), true);
@@ -661,6 +666,401 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "amiarcadia_region", "amiarcadia_region", "PAL");
         }
 
+        /// <summary>
+        /// The libretro core scans a single directory for Kickstart ROMs. It picks that directory
+        /// from a fixed priority list (libretro.cpp, core_entry) where the frontend save directory
+        /// comes before the frontend system directory, and it creates an empty "Kickstarts" folder
+        /// there on every WHDLoad launch. That empty folder then wins the list and hides
+        /// \bios\amiberry, so the WHDBooter can no longer resolve the Kickstart a game asks for.
+        /// Mirroring the available ROMs there keeps the winning folder a populated one.
+        /// </summary>
+        private void ConfigureAmiberryWhdKickstarts(string system)
+        {
+            if (string.IsNullOrEmpty(system))
+                return;
+
+            string savesPath = AppConfig.GetFullPath("saves");
+            string biosPath = AppConfig.GetFullPath("bios");
+
+            if (string.IsNullOrEmpty(savesPath) || string.IsNullOrEmpty(biosPath))
+                return;
+
+            // Must stay aligned with the save path built in LibRetro.Generator.Configure()
+            string targetPath = Path.Combine(savesPath, system, "LR-amiberry", "Kickstarts");
+
+            // Core specific bios folder first, then the shared one
+            var sourcePaths = new List<string>
+            {
+                Path.Combine(biosPath, "amiberry"),
+                biosPath
+            };
+
+            // The WHDBooter can request a Kickstart other than the one of the selected model,
+            // so every known file is mirrored, not only the ones of the current family.
+            var fileNames = new List<string>();
+
+            foreach (var entry in _amiberryKickstarts)
+                fileNames.AddRange(entry.Value);
+
+            foreach (var entry in _amiberryKickstartsExt)
+                fileNames.AddRange(entry.Value);
+
+            // Needed by load_keyring() for encrypted (Cloanto) ROMs
+            fileNames.Add("rom.key");
+
+            int available = 0;
+
+            foreach (var fileName in fileNames.Distinct(StringComparer.InvariantCultureIgnoreCase))
+            {
+                string target = Path.Combine(targetPath, fileName);
+
+                if (File.Exists(target))
+                {
+                    available++;
+                    continue;
+                }
+
+                string source = sourcePaths.Select(p => Path.Combine(p, fileName)).FirstOrDefault(File.Exists);
+
+                if (source == null)
+                    continue;
+
+                try
+                {
+                    FileTools.TryCreateDirectory(targetPath);
+                    File.Copy(source, target, false);
+                    available++;
+                    SimpleLogger.Instance.Info("[Amiberry] Mirrored Kickstart into the ROM scan path: " + fileName);
+                }
+                catch (Exception ex)
+                {
+                    SimpleLogger.Instance.Error("[Amiberry] Failed to mirror Kickstart " + fileName + " - " + ex.Message);
+                }
+            }
+
+            if (available > 0)
+            {
+                SimpleLogger.Instance.Info("[Amiberry] ROM scan path: " + targetPath + " (" + available + " file(s))");
+                return;
+            }
+
+            // Nothing could be mirrored. Remove the folder if the core created it empty on an
+            // earlier run, so the priority list falls through to \bios\amiberry instead.
+            try
+            {
+                if (Directory.Exists(targetPath) && !Directory.EnumerateFileSystemEntries(targetPath).Any())
+                {
+                    Directory.Delete(targetPath);
+                    SimpleLogger.Instance.Info("[Amiberry] Removed the empty Kickstarts folder so \\bios\\amiberry is used for the ROM scan.");
+                }
+            }
+            catch { }
+        }
+
+        private void Configureamiberry(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
+        {
+            if (core != "amiberry")
+                return;
+
+            // System
+            string defaultModel = "A500";
+            switch (system)
+            {
+                case "amiga1200": defaultModel = "A1200"; break;
+                case "amiga4000": defaultModel = "A4040"; break;
+                case "amigacd32": defaultModel = "CD32"; break;
+                case "amigacdtv": defaultModel = "CDTV"; break;
+                case "amiga600": defaultModel = "A600"; break;
+            }
+
+            BindFeature(coreSettings, "amiberry_model", "amiberry_model", defaultModel);
+            BindFeature(coreSettings, "amiberry_cpu_model", "amiberry_cpu_model", "auto");
+
+            // Kickstart
+            string selectedModel = SystemConfig.isOptSet("amiberry_model") && !string.IsNullOrEmpty(SystemConfig["amiberry_model"]) ? SystemConfig["amiberry_model"] : defaultModel;
+
+            ConfigureAmiberryKickstart(coreSettings, selectedModel);
+            ConfigureCDSystemsExtRoms(selectedModel);
+            ConfigureAmiberryWhdKickstarts(system);
+
+            BindFeature(coreSettings, "amiberry_chipset", "amiberry_chipset", "auto");
+            BindFeature(coreSettings, "amiberry_chipset_aga", "amiberry_chipset_aga", "auto");
+
+            BindFeature(coreSettings, "amiberry_video_standard", "amiberry_video_standard", "auto");
+            BindFeature(coreSettings, "amiberry_floppy_speed", "amiberry_floppy_speed", "100");
+
+            // Video
+            BindFeature(coreSettings, "amiberry_crop_overscan", "amiberry_crop_overscan", "disabled");
+            BindFeature(coreSettings, "amiberry_internal_vsync", "amiberry_internal_vsync", "disabled");
+            BindBoolFeature(coreSettings, "amiberry_statusline", "amiberry_statusline", "enabled", "disabled");
+            BindFeature(coreSettings, "amiberry_statusline_size", "amiberry_statusline_size", "1x");
+
+            // Audio
+            BindFeature(coreSettings, "amiberry_audio_rate", "amiberry_audio_rate", "auto");
+            BindFeature(coreSettings, "amiberry_audio_interpolation", "amiberry_audio_interpolation", "auto");
+            BindFeature(coreSettings, "amiberry_sound_filter", "amiberry_sound_filter", "off");
+            BindFeature(coreSettings, "amiberry_stereo_separation", "amiberry_stereo_separation", "7");
+            BindFeature(coreSettings, "amiberry_midi_output", "amiberry_midi_output", "disabled");
+
+            // Controls
+            if (system == "amigacd32")
+            {
+                coreSettings["amiberry_port0_device"] = "joystick";
+                coreSettings["amiberry_port1_device"] = "joystick";
+            }
+            else
+            {
+                BindFeature(coreSettings, "amiberry_port0_device", "amiberry_port0_device", "mouse");
+                BindFeature(coreSettings, "amiberry_port1_device", "amiberry_port1_device", "joystick");
+            }
+
+            BindBoolFeature(coreSettings, "amiberry_swap_ports", "amiberry_swap_ports", "enabled", "disabled");
+            BindFeature(coreSettings, "amiberry_joyport_order", "amiberry_joyport_order", "auto");
+            BindBoolFeature(coreSettings, "amiberry_analog", "amiberry_analog", "enabled", "disabled");
+            BindFeature(coreSettings, "amiberry_joy_deadzone", "amiberry_joy_deadzone", "33");
+            BindFeature(coreSettings, "amiberry_analog_sensitivity", "amiberry_analog_sensitivity", "18");
+            BindFeature(coreSettings, "amiberry_joy_as_mouse", "amiberry_joy_as_mouse", "disabled");
+
+            string defaultDevice = system == "amigacd32" ? "513" : "769";
+            BindFeature(retroarchConfig, "input_libretro_device_p1", "amiberry_controller1", defaultDevice);
+            BindFeature(retroarchConfig, "input_libretro_device_p2", "amiberry_controller2", defaultDevice);
+
+            BindBoolFeature(coreSettings, "amiberry_input_log", "amiberry_input_log", "enabled", "disabled");
+        }
+
+        private void ConfigureApplewin(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
+        {
+            if (core != "applewin")
+                return;
+
+            // System
+            BindFeature(coreSettings, "applewin_machine", "applewin_machine", "Apple //e (enhanced)");
+            BindFeature(coreSettings, "applewin_video_refresh_rate", "applewin_video_refresh_rate", "60Hz");
+
+            // Expansion slots
+            BindFeature(coreSettings, "applewin_slot3", "applewin_slot3", "Empty");
+            BindFeature(coreSettings, "applewin_slot4", "applewin_slot4", "Mockingboard C");
+            BindFeature(coreSettings, "applewin_slot5", "applewin_slot5", "Empty");
+            BindFeature(coreSettings, "applewin_slot7", "applewin_slot7", "Hard Disk Controller");
+
+            // Video
+            BindFeature(coreSettings, "applewin_video_mode", "applewin_video_mode", "Color (RGB Card/Monitor)");
+            BindFeature(coreSettings, "applewin_video_style", "applewin_video_style", "Half Scanlines");
+
+            // Disk control
+            BindFeature(coreSettings, "applewin_disk_control_drive", "applewin_disk_control_drive", "Drive 1");
+            BindFeature(coreSettings, "applewin_playlist_start", "applewin_playlist_start", "First");
+            BindBoolFeature(coreSettings, "applewin_floppy_multidrive", "applewin_floppy_multidrive", "enabled", "disabled");
+
+            // Input
+            BindFeature(coreSettings, "applewin_keyboard_type", "applewin_keyboard_type", "ASCII");
+            BindFeatureSlider(coreSettings, "applewin_mouse_speed", "applewin_mouse_speed", "1.00", 2);
+
+            // Game port device, player 1 only : the core exposes no device list for port 2,
+            BindFeature(retroarchConfig, "input_libretro_device_p1", "applewin_controller1", "1");
+        }
+
+        private static readonly Dictionary<string, string[]> _amiberryKickstarts = new Dictionary<string, string[]>(StringComparer.InvariantCultureIgnoreCase)
+        {
+            { "A500OG", new[] { "kick33180.A500", "kick33180.A500.rom", "amiga-os-120.rom", "kick12.rom",
+                "Kickstart v1.2 rev 33.180 (1986)(Commodore)(A500-A2000)[!].rom" } },
+
+            { "A500", new[] { "kick34005.A500", "kick34005.A500.rom", "amiga-os-130.rom", "kick13.rom", "kick.rom",
+                "Kickstart v1.3 rev 34.5 (1987)(Commodore)(A500-A1000-A2000-CDTV)[!].rom" } },
+
+            { "A500+", new[] { "kick37175.A500", "kick37175.A500.rom", "amiga-os-204.rom", "kick20.rom", "kick204.rom",
+                "Kickstart v2.04 rev 37.175 (1991)(Commodore)(A500+)[!].rom" } },
+
+            { "A600", new[] { "kick40063.A600", "kick40063.A600.rom", "amiga-os-310-a600.rom", "kick205.rom", "kick31.rom",
+                "Kickstart v3.1 rev 40.63 (1993)(Commodore)(A500-A600-A2000)[!].rom" } },
+
+            { "A1200", new[] { "kick40068.A1200", "kick40068.A1200.rom", "amiga-os-310-a1200.rom", "kick31.rom", "kick.rom",
+                "Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200)[!].rom" } },
+
+            { "A4000", new[] { "kick40068.A4000", "kick40068.A4000.rom", "amiga-os-310-a4000.rom", "kick31.rom", "kick.rom",
+                "Kickstart v3.1 rev 40.68 (1993)(Commodore)(A4000).rom" } },
+
+            { "CD32", new[] { "kick40060.CD32", "kick40060.CD32.rom", "cd32.rom", "amiga-os-310-cd32.rom",
+                "Kickstart v3.1 rev 40.60 (1993)(Commodore)(CD32).rom" } },
+
+            { "CDTV", new[] { "kick34005.A500", "kick34005.A500.rom", "cdtv.rom", "amiga-os-130.rom", "kick13.rom",
+                "Kickstart v1.3 rev 34.5 (1987)(Commodore)(A500-A1000-A2000-CDTV)[!].rom" } },
+        };
+
+        private static readonly Dictionary<string, string[]> _amiberryKickstartsExt = new Dictionary<string, string[]>(StringComparer.InvariantCultureIgnoreCase)
+        {
+            { "CD32", new[] { "cd32ext.rom", "amiga-ext-310-cd32.rom", "CD32 Extended.ROM" } },
+
+            { "CDTV", new[] { "cdtvext.rom", "CDTV Extended.ROM" } },
+        };
+
+        private static string AmiberryModelFamily(string model)
+        {
+            if (string.IsNullOrEmpty(model))
+                return "A500";
+            if (model.Equals("A500OG", StringComparison.InvariantCultureIgnoreCase)) return "A500OG";
+            if (model.StartsWith("A1200", StringComparison.InvariantCultureIgnoreCase)) return "A1200";
+            if (model.StartsWith("A500+", StringComparison.InvariantCultureIgnoreCase)) return "A500+";
+            if (model.StartsWith("A500", StringComparison.InvariantCultureIgnoreCase)) return "A500";
+            if (model.StartsWith("A600", StringComparison.InvariantCultureIgnoreCase)) return "A600";
+            if (model.StartsWith("A40", StringComparison.InvariantCultureIgnoreCase)) return "A4000";
+            if (model.StartsWith("CD32", StringComparison.InvariantCultureIgnoreCase)) return "CD32";
+            if (model.StartsWith("CDTV", StringComparison.InvariantCultureIgnoreCase)) return "CDTV";
+            return model;
+        }
+
+        private void ConfigureAmiberryKickstart(ConfigFile coreSettings, string model)
+        {
+            if (SystemConfig.isOptSet("amiberry_kickstart") && !string.IsNullOrEmpty(SystemConfig["amiberry_kickstart"]) && SystemConfig["amiberry_kickstart"] != "auto")
+            {
+                coreSettings["amiberry_kickstart"] = SystemConfig["amiberry_kickstart"];
+                return;
+            }
+
+            coreSettings["amiberry_kickstart"] = "auto";
+
+            string rom = SystemConfig["rom"];
+            if (!string.IsNullOrEmpty(rom))
+            {
+                string ext = Path.GetExtension(rom).ToLowerInvariant();
+                if (ext == ".lha" || ext == ".lzh" || ext == ".rp9")
+                    return;
+            }
+
+            string[] candidates;
+            if (!_amiberryKickstarts.TryGetValue(AmiberryModelFamily(model), out candidates))
+                return;
+
+            string biosPath = AppConfig.GetFullPath("bios");
+            
+            if (string.IsNullOrEmpty(biosPath))
+                return;
+
+            string targetBiosPath = Path.Combine(biosPath, "amiberry");
+            FileTools.TryCreateDirectory(targetBiosPath);
+
+            foreach (var candidate in candidates)
+            {
+                string targetBiosToUse = Path.Combine(targetBiosPath, candidate);
+                string sourceBiosToCopy = Path.Combine(biosPath, candidate);
+                if (!File.Exists(targetBiosToUse) && !File.Exists(sourceBiosToCopy))
+                    continue;
+
+                if (!File.Exists(targetBiosToUse) && File.Exists(sourceBiosToCopy))
+                {
+                    try
+                    {
+                        File.Copy(sourceBiosToCopy, targetBiosToUse, true);
+                        SimpleLogger.Instance.Info("[Amiberry] Copied Kickstart for " + model + ": " + candidate);
+                    }
+                    catch (Exception ex)
+                    {
+                        SimpleLogger.Instance.Error("[Amiberry] Failed to copy Kickstart for " + model + ": " + candidate + " - " + ex.Message);
+                        continue;
+                    }
+                }
+
+                if (File.Exists(targetBiosToUse))
+                {
+                    SimpleLogger.Instance.Info("[Amiberry] Kickstart for " + model + ": " + targetBiosToUse);
+                    return;
+                }
+            }
+
+            SimpleLogger.Instance.Warning("[Amiberry] No Kickstart found for " + model + ". Expected one of: " + string.Join(", ", candidates) + " in \\bios.");
+        }
+
+        private void ConfigureCDSystemsExtRoms(string model)
+        {
+            if (model != "CD32" && model != "CDTV")
+                return;
+
+            string[] candidates;
+            if (!_amiberryKickstartsExt.TryGetValue(AmiberryModelFamily(model), out candidates))
+                return;
+
+            string biosPath = AppConfig.GetFullPath("bios");
+
+            if (string.IsNullOrEmpty(biosPath))
+                return;
+
+            string targetBiosPath = Path.Combine(biosPath, "amiberry");
+            FileTools.TryCreateDirectory(targetBiosPath);
+
+            foreach (var candidate in candidates)
+            {
+                string targetBiosToUse = Path.Combine(targetBiosPath, candidate);
+                string sourceBiosToCopy = Path.Combine(biosPath, candidate);
+                if (!File.Exists(targetBiosToUse) && !File.Exists(sourceBiosToCopy))
+                    continue;
+
+                if (!File.Exists(targetBiosToUse) && File.Exists(sourceBiosToCopy))
+                {
+                    try
+                    {
+                        File.Copy(sourceBiosToCopy, targetBiosToUse, true);
+                        SimpleLogger.Instance.Info("[Amiberry] Copied Kickstart for " + model + ": " + candidate);
+                    }
+                    catch (Exception ex)
+                    {
+                        SimpleLogger.Instance.Error("[Amiberry] Failed to copy Kickstart for " + model + ": " + candidate + " - " + ex.Message);
+                        continue;
+                    }
+                }
+
+                if (File.Exists(targetBiosToUse))
+                {
+                    SimpleLogger.Instance.Info("[Amiberry] Kickstart for " + model + ": " + targetBiosToUse);
+                    return;
+                }
+            }
+
+            if (model == "CD32")
+            {
+                string retroBios = Path.Combine(AppConfig.GetFullPath("bios"), "kick40060.CD32.ext");
+                string retroTargetBios = Path.Combine(targetBiosPath, "cd32ext.rom");
+
+                if (!File.Exists(retroTargetBios) && File.Exists(retroBios))
+                {
+                    try
+                    {
+                        File.Copy(retroBios, retroTargetBios, true);
+                        SimpleLogger.Instance.Info("[Amiberry] Copied Kickstart ext for " + model + ": " + "kick40060.CD32.ext");
+                    }
+                    catch (Exception ex)
+                    {
+                        SimpleLogger.Instance.Error("[Amiberry] Failed to copy Kickstart Ext for " + model + ": " + "kick40060.CD32.ext" + " - " + ex.Message);
+                    }
+                }
+
+                if (File.Exists(retroTargetBios))
+                    return;
+            }
+            else if (model == "CDTV")
+            {
+                string retroBios = Path.Combine(AppConfig.GetFullPath("bios"), "kick34005.CDTV");
+                string retroTargetBios = Path.Combine(targetBiosPath, "cdtvext.rom");
+
+                if (!File.Exists(retroTargetBios) && File.Exists(retroBios))
+                {
+                    try
+                    {
+                        File.Copy(retroBios, retroTargetBios, true);
+                        SimpleLogger.Instance.Info("[Amiberry] Copied Kickstart ext for " + model + ": " + "kick34005.CDTV");
+                    }
+                    catch (Exception ex)
+                    {
+                        SimpleLogger.Instance.Error("[Amiberry] Failed to copy Kickstart Ext for " + model + ": " + "kick34005.CDTV" + " - " + ex.Message);
+                    }
+                }
+
+                if (File.Exists(retroTargetBios))
+                    return;
+            }
+
+            SimpleLogger.Instance.Warning("[Amiberry] No Kickstart Ext found for " + model + ". Expected one of: " + string.Join(", ", candidates) + " in \\bios\\amiberry.");
+        }
+
         private void ConfigureAtari800(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
         {
             if (core != "atari800")
@@ -709,7 +1109,7 @@ namespace EmulatorLauncher.Libretro
                 coreSettings["atari800_system"] = SystemConfig["atari800_system"];
 
             // Controls
-            BindFeature(coreSettings, "atari800_opt2", "a800_control_hacks", "none");
+            BindFeature(coreSettings, "a800_control_hacks", "a800_control_hacks", "none");
             BindBoolFeature(coreSettings, "paddle_active", "a800_paddle", "enabled", "disabled");
 
             if (system == "atari5200")
@@ -805,13 +1205,16 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "citra_is_new_3ds", "azaharlr_is_new_3ds", "New 3DS");
             BindFeature(coreSettings, "citra_layout_option", "azaharlr_layout_option", "default");
             BindBoolFeature(coreSettings, "citra_swap_screen", "azaharls_swap_screen", "Bottom", "Top");
+            BindFeature(coreSettings, "citra_swap_screen_mode", "azaharlr_swap_screen_mode", "Toggle");
             BindBoolFeature(coreSettings, "citra_use_hw_shader", "azaharlr_use_hw_shaders", "disabled", "enabled");
+            BindBoolFeatureOn(coreSettings, "citra_shaders_accurate_mul", "azaharlr_shaders_accurate_mul", "enabled", "disabled");
             BindFeature(coreSettings, "citra_texture_filter", "azaharlr_texture_filter", "none");
             BindBoolFeature(coreSettings, "citra_custom_textures", "azaharlr_custom_textures", "enabled", "disabled");
+            BindFeature(coreSettings, "citra_texture_sampling", "azaharlr_texture_sampling", "GameControlled");
             BindFeature(coreSettings, "citra_region_value", "azaharlr_region_value", "Auto");
             BindFeature(coreSettings, "citra_language_value", "azaharlr_language", "English");
             BindBoolFeature(coreSettings, "citra_use_virtual_sd", "azaharlr_use_virtual_sd", "disabled", "enabled");
-            BindFeature(coreSettings, "citra_graphics_api", "azaharlr_graphics_api", "OpenGL");
+            BindFeature(coreSettings, "citra_graphics_api", "azaharlr_graphics_api", "Auto");
             BindBoolFeature(coreSettings, "citra_enable_mouse_touchscreen", "azaharlr_mouse_touchscreen", "disabled", "enabled");
             BindFeature(coreSettings, "citra_analog_function", "azaharlr_analog_function", "c_stick_and_touchscreen");
             BindBoolFeatureOn(coreSettings, "citra_enable_touch_pointer_timeout", "azaharlr_enable_touch_pointer_timeout", "enabled", "disabled");
@@ -1082,6 +1485,115 @@ namespace EmulatorLauncher.Libretro
             SetupLightGuns(retroarchConfig, "260", core, 1);
         }
 
+        private void ConfigureCemu(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
+        {
+            if (core != "cemu")
+                return;
+
+            Dictionary<string, string> cemuLanguageMap = new Dictionary<string, string>()
+            {
+                { "0", "Japanese" },
+                { "1", "English" },
+                { "2", "French" },
+                { "3", "German" },
+                { "4", "Italian" },
+                { "5", "Spanish" },
+                { "6", "Chinese" },
+                { "7", "Korean" },
+                { "8", "Dutch" },
+                { "9", "Portuguese" },
+                { "10", "Russian" },
+                { "11", "Taiwanese" }
+            };
+
+            coreSettings["cemu_convert_to_wua"] = "disabled";
+
+            // GRAPHICS API
+            string cemuGpuApi = SystemConfig.GetValueOrDefault("cemulr_gpu_api", "OpenGL");
+            coreSettings["cemu_gpu_api"] = cemuGpuApi;
+
+            if (cemuGpuApi == "Vulkan")
+                retroarchConfig["video_driver"] = "vulkan";
+            else
+                retroarchConfig["video_driver"] = "glcore";
+
+            _coreVideoDriverForce = true;
+
+            // VIDEO
+            BindFeature(coreSettings, "cemu_internal_resolution", "cemulr_internal_resolution", "1280x720");
+            BindFeature(coreSettings, "cemu_upscale_filter", "cemulr_upscale_filter", "linear");
+            BindFeature(coreSettings, "cemu_downscale_filter", "cemulr_downscale_filter", "linear");
+            BindFeature(coreSettings, "cemu_fullscreen_scaling", "cemulr_fullscreen_scaling", "keep_aspect");
+            BindBoolFeature(coreSettings, "cemu_skip_draw_on_dupe", "cemulr_skip_draw_on_dupe", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "cemu_bc1_16bit", "cemulr_bc1_16bit", "enabled", "disabled");
+            BindBoolFeatureOn(coreSettings, "cemu_onscreen_notifications", "cemulr_osd", "enabled", "disabled");
+
+            // SHADERS
+            BindBoolFeatureOn(coreSettings, "cemu_async_shader_compile", "cemulr_async_shader_compile", "enabled", "disabled");
+            BindFeature(coreSettings, "cemu_precompiled_shaders", "cemulr_precompiled_shaders", "auto");
+            BindBoolFeatureOn(coreSettings, "cemu_accurate_shader_mul", "cemulr_accurate_shader_mul", "enabled", "disabled");
+            BindBoolFeatureOn(coreSettings, "cemu_shader_fast_math", "cemulr_shader_fast_math", "enabled", "disabled");
+            BindBoolFeatureOn(coreSettings, "cemu_gx2drawdone_sync", "cemulr_gx2drawdone_sync", "enabled", "disabled");
+
+            // SYSTEM
+            BindFeature(coreSettings, "cemu_cpu_mode", "cemulr_cpu_mode", "auto");
+            BindFeature(coreSettings, "cemu_thread_quantum", "cemulr_thread_quantum", "45000");
+
+            if (SystemConfig.isOptSet("wiiu_language") && !string.IsNullOrEmpty(SystemConfig["wiiu_language"]) && cemuLanguageMap.ContainsKey(SystemConfig["wiiu_language"]))
+                coreSettings["cemu_console_language"] = cemuLanguageMap[SystemConfig["wiiu_language"]];
+            else
+                coreSettings["cemu_console_language"] = cemuLanguageMap.TryGetValue(CemuGenerator.GetDefaultWiiULanguage(), out string cemuLanguage) ? cemuLanguage : "English";
+
+            // AUDIO
+            BindFeature(coreSettings, "cemu_audio_latency", "cemulr_audio_latency", "2");
+
+            // GAMEPAD SCREEN
+            string cemuLayout = SystemConfig.GetValueOrDefault("cemulr_screen_layout", "Default Screen");
+
+            if (cemuLayout == "switchable")
+            {
+                coreSettings["cemu_number_of_screen_layouts"] = "2";
+                coreSettings["cemu_screen_layout1"] = "Default Screen";
+                coreSettings["cemu_screen_layout2"] = "GamePad Screen";
+                BindFeature(coreSettings, "cemu_next_screen_layout_button", "cemulr_layout_button", "L + R + L2 + R2 + L3 + R3");
+            }
+            else
+            {
+                coreSettings["cemu_number_of_screen_layouts"] = "1";
+                coreSettings["cemu_screen_layout1"] = cemuLayout;
+                coreSettings["cemu_screen_layout2"] = "GamePad Screen";
+                coreSettings["cemu_next_screen_layout_button"] = "Disabled";
+            }
+
+            coreSettings["cemu_screen_layout3"] = "Side by Side";
+            coreSettings["cemu_screen_layout4"] = "Top Bottom";
+            coreSettings["cemu_screen_layout5"] = "Picture in Picture";
+
+            BindFeature(coreSettings, "cemu_drc_position", "cemulr_drc_position", "normal");
+
+            // EMULATED USB DEVICES
+            BindBoolFeature(coreSettings, "cemu_emulate_skylander_portal", "cemulr_skylander_portal", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "cemu_emulate_infinity_base", "cemulr_infinity_base", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "cemu_emulate_dimensions_toypad", "cemulr_dimensions_toypad", "enabled", "disabled");
+
+            // CONTROLS
+            // Wii Remote 257, Pro Controller 513, Classic 769,
+            // GamePad + Wii Remote 1025, Wii Remote sideways 1281,
+            // GamePad + Wii Remote sideways 1537.
+            BindFeature(retroarchConfig, "input_libretro_device_p1", "cemulr_controller1", "1");
+            BindFeature(retroarchConfig, "input_libretro_device_p2", "cemulr_controller2", "0");
+            BindFeature(retroarchConfig, "input_libretro_device_p3", "cemulr_controller3", "0");
+            BindFeature(retroarchConfig, "input_libretro_device_p4", "cemulr_controller4", "0");
+
+            // Disable Debug logging
+            coreSettings["cemu_log_filesystem"] = "disabled";
+            coreSettings["cemu_log_thread_sync"] = "disabled";
+            coreSettings["cemu_log_thread_dump"] = "disabled";
+            coreSettings["cemu_log_system_api"] = "disabled";
+            coreSettings["cemu_log_texture_memory"] = "disabled";
+            coreSettings["cemu_log_input_api"] = "disabled";
+        }
+
         private void ConfigureCitra(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
         {
             if (core != "citra")
@@ -1350,10 +1862,10 @@ namespace EmulatorLauncher.Libretro
                 string jsonText = File.ReadAllText(patchFile);
                 List<GamePatches> games = JsonConvert.DeserializeObject<List<GamePatches>>(jsonText);
 
-                var game = games.FirstOrDefault(g => g.GameId.Equals(gameID, StringComparison.OrdinalIgnoreCase));
+                var game = games.FirstOrDefault(g => g.GameId.Split(',').Any(id => id.Trim().Equals(gameID, StringComparison.OrdinalIgnoreCase)));
                 if (game == null)
                 {
-                    game = games.FirstOrDefault(g => g.GameIdCrediar.Equals(gameID, StringComparison.OrdinalIgnoreCase));
+                    game = games.FirstOrDefault(g => g.GameIdCrediar.Split(',').Any(id => id.Trim().Equals(gameID, StringComparison.OrdinalIgnoreCase)));
                 }
 
                 if (game == null)
@@ -1387,7 +1899,7 @@ namespace EmulatorLauncher.Libretro
                     }
 
                     // Disable patch if not enabled in features
-                    if (SystemConfig.isOptSet(featureName) && !SystemConfig.getOptBoolean(featureName))
+                    if ((SystemConfig.isOptSet(featureName) && !SystemConfig.getOptBoolean(featureName)) || !SystemConfig.isOptSet(featureName))
                     {
                         ini.Remove(enableSection, patch.PatchName);
                         SimpleLogger.Instance.Info($"[INFO] Patch {patch.PatchName} has been disabled for game {gameID}");
@@ -1493,10 +2005,10 @@ namespace EmulatorLauncher.Libretro
                 BindBoolFeature(coreSettings, "dolphin_bluetooth_passthrough", "dolphin_bt_pass", "enabled", "disabled");
                 BindFeature(coreSettings, "dolphin_ir_modifier", "dolphin_ir_modifier", "None");
                 BindFeature(coreSettings, "dolphin_swing_modifier", "dolphin_swing_modifier", "Disabled");
-                BindFeature(coreSettings, "dolphin_ir_mode", "dolphin_ir_mode", "1");
-                BindFeature(coreSettings, "dolphin_ir_offset", "dolphin_ir_offset", "0");
-                BindFeature(coreSettings, "dolphin_ir_deadzone", "dolphin_ir_deadzone", "0");
-                BindFeature(coreSettings, "dolphin_swing_angle", "dolphin_swing_angle", "90");
+                BindFeature(coreSettings, "dolphin_ir_mode", "dolphin_ir_mode", "1");   
+                BindFeatureSlider(coreSettings, "dolphin_ir_offset", "dolphin_ir_offset", "0", 0);
+                BindFeatureSlider(coreSettings, "dolphin_ir_deadzone", "dolphin_ir_deadzone", "0", 0);
+                BindFeatureSlider(coreSettings, "dolphin_swing_angle", "dolphin_swing_angle", "90", 0);
                 BindBoolFeature(coreSettings, "dolphin_alt_gc_ports_on_wii", "dolphin_alt_gc_ports_on_wii", "enabled", "disabled");
             }
 
@@ -2075,7 +2587,7 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "fceumm_turbo_delay", "fceumm_turbo_delay", "3");
             BindBoolFeature(coreSettings, "fceumm_show_crosshair", "fceumm_show_crosshair", "enabled", "disabled");
             BindFeature(coreSettings, "fceumm_zapper_mode", "gun_input", "clightgun");
-            BindFeature(coreSettings, "fceumm_zapper_tolerance", "fceumm_zapper_tolerance", "6");
+            BindFeatureSlider(coreSettings, "fceumm_zapper_tolerance", "fceumm_zapper_tolerance", "6");
             BindBoolFeature(coreSettings, "fceumm_zapper_trigger", "fceumm_zapper_trigger", "enabled", "disabled");
             BindBoolFeature(coreSettings, "fceumm_zapper_sensor", "fceumm_zapper_sensor", "enabled", "disabled");
 
@@ -2319,7 +2831,37 @@ namespace EmulatorLauncher.Libretro
             if (core != "gearcoleco")
                 return;
 
+            bool adam = (system == "adam");
+            coreSettings["gearcoleco_cartridge_hardware"] = adam ? "ADAM" : "ColecoVision";
+
+            if (adam)
+            {
+                BindFeature(coreSettings, "gearcoleco_adam_disk_drive", "gearcoleco_adam_disk_drive", "Loaded media");
+                BindFeature(coreSettings, "gearcoleco_adam_writable_media", "gearcoleco_adam_writable_media", "Save-directory working copy");
+            }
+            else
+            {
+                coreSettings["gearcoleco_adam_disk_drive"] = "Loaded media";
+                coreSettings["gearcoleco_adam_writable_media"] = "Disabled";
+            }
+
+            coreSettings["gearcoleco_adam_computer_reset"] = "Idle";
+
+            // System
+            BindFeature(coreSettings, "gearcoleco_timing", "gearcoleco_timing", "Auto");
+            BindFeature(coreSettings, "gearcoleco_mapper", "gearcoleco_mapper", "Auto");
+
+            // Video
+            BindFeature(coreSettings, "gearcoleco_video_chip", "gearcoleco_video_chip", "Auto");
+            BindFeature(coreSettings, "gearcoleco_aspect_ratio", "gearcoleco_aspect_ratio", "1:1 PAR");
+            BindFeature(coreSettings, "gearcoleco_overscan", "gearcoleco_overscan", "Disabled");
+            BindBoolFeature(coreSettings, "gearcoleco_no_sprite_limit", "gearcoleco_no_sprite_limit", "Enabled", "Disabled");
+
             // Controls
+            BindBoolFeature(coreSettings, "gearcoleco_up_down_allowed", "gearcoleco_up_down_allowed", "Enabled", "Disabled");
+            BindFeature(coreSettings, "gearcoleco_spinners", "gearcoleco_spinners", "Disabled");
+            BindFeatureSlider(coreSettings, "gearcoleco_spinner_sensitivity", "gearcoleco_spinner_sensitivity", "1");
+
             BindFeature(retroarchConfig, "input_libretro_device_p1", "gearcoleco_controller", "1");
             BindFeature(retroarchConfig, "input_libretro_device_p2", "gearcoleco_controller", "1");
         }
@@ -2359,6 +2901,40 @@ namespace EmulatorLauncher.Libretro
         {
             if (core != "gearsystem")
                 return;
+
+            if (SystemConfig.getOptBoolean("gearsystem_system"))
+            {
+                switch (system)
+                {
+                    case "mastersystem":
+                    case "sms":
+                    case "ms":
+                        coreSettings["gearsystem_system"] = "Master System / Mark III";
+                        break;
+                    case "gamegear":
+                    case "gg":
+                        coreSettings["gearsystem_system"] = "Game Gear";
+                        break;
+                    case "sg1000":
+                    case "sg-1000":
+                        coreSettings["gearsystem_system"] = "SG-1000 / Multivision";
+                        break;
+                    default:
+                        coreSettings["gearsystem_system"] = "Auto";
+                        break;
+                }
+            }
+            else
+                coreSettings["gearsystem_system"] = "Auto";
+
+            BindFeature(coreSettings, "gearsystem_region", "gearsystem_region", "Auto");
+            BindFeature(coreSettings, "gearsystem_timing", "gearsystem_timing", "Auto");
+            BindFeature(coreSettings, "gearsystem_aspect_ratio", "gearsystem_aspect_ratio", "1:1 PAR");
+            BindFeature(coreSettings, "gearsystem_hide_left_bar", "gearsystem_hide_left_bar", "No");
+            BindBoolFeature(coreSettings, "gearsystem_bios_gg", "gearsystem_bios_gg", "Enabled", "Disabled");
+            BindBoolFeature(coreSettings, "gearsystem_bios_sms", "gearsystem_bios_sms", "Enabled", "Disabled");
+            BindBoolFeature(coreSettings, "gearsystem_ym2413", "gearsystem_ym2413", "Disabled", "Auto");
+            BindFeature(coreSettings, "gearsystem_overscan", "gearsystem_overscan", "Disabled");
 
             // Controls
             BindFeature(retroarchConfig, "input_libretro_device_p1", "gearsystem_controller", "1");
@@ -2743,34 +3319,92 @@ namespace EmulatorLauncher.Libretro
             }
         }
 
+        private static string GetFirstPS2Bios(string biosFolder)
+        {
+            if (!Directory.Exists(biosFolder))
+                return null;
+
+            const long MIN_BIOS_SIZE = 4 * 1024 * 1024;
+            const long MAX_BIOS_SIZE = 8 * 1024 * 1024;
+
+            var candidates = new DirectoryInfo(biosFolder)
+                .GetFiles()
+                .Where(f => f.Length >= MIN_BIOS_SIZE && f.Length <= MAX_BIOS_SIZE)
+                .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(f => f.Name)
+                .ToList();
+
+            if (candidates.Count == 0)
+                return null;
+
+            string legacyDefault = candidates.FirstOrDefault(n => n.Equals("ps2-0230a-20080220.bin", StringComparison.OrdinalIgnoreCase));
+
+            return legacyDefault ?? candidates[0];
+        }
+
         private void ConfigureLRPS2(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
         {
             if (core != "pcsx2")
                 return;
 
             // BIOS
-            string pcsx2Bios = "ps2-0230a-20080220.bin";
+            string biosRoot = retroarchConfig["system_directory"];
+            if (string.IsNullOrEmpty(biosRoot))
+                biosRoot = AppConfig.GetFullPath("bios");
+
+            string ps2BiosFolder = Path.Combine(biosRoot, "pcsx2", "bios");
 
             if (SystemConfig.isOptSet("lrps2_bios") && !string.IsNullOrEmpty(SystemConfig["lrps2_bios"]))
-                pcsx2Bios = SystemConfig["lrps2_bios"];
+            {
+                string pcsx2Bios = SystemConfig["lrps2_bios"];
 
-            if (!File.Exists(Path.Combine(AppConfig.GetFullPath("bios"), "pcsx2", "bios", pcsx2Bios)))
-                throw new ApplicationException("BIOS file " + pcsx2Bios + " does not exist in 'bios/pcsx2/bios' folder.");
+                if (!File.Exists(Path.Combine(ps2BiosFolder, pcsx2Bios)))
+                    throw new ApplicationException("BIOS file " + pcsx2Bios + " does not exist in '" + ps2BiosFolder + "'.");
 
-            coreSettings["pcsx2_bios"] = pcsx2Bios;
+                coreSettings["pcsx2_bios"] = pcsx2Bios;
+            }
+            else
+            {
+                string autoBios = GetFirstPS2Bios(ps2BiosFolder);
 
-            BindBoolFeatureOn(coreSettings, "pcsx2_shared_memory_cards", "pcsx2_shared_memory_cards", "enabled", "disabled");
+                if (autoBios == null)
+                    throw new ApplicationException("No valid PS2 BIOS file found in '" + ps2BiosFolder + "'.");
+
+                coreSettings["pcsx2_bios"] = autoBios;
+            }
+
+            // SYSTEM
+            BindBoolFeatureOn(coreSettings, "pcsx2_shared_memory_cards", "lrps2_shared_memory_cards", "enabled", "disabled");
             BindBoolFeatureOn(coreSettings, "pcsx2_fastboot", "lrps2_fastboot", "enabled", "disabled");
             BindBoolFeature(coreSettings, "pcsx2_fastcdvd", "lrps2_fastcdvd", "enabled", "disabled");
             BindBoolFeature(coreSettings, "pcsx2_enable_cheats", "lrps2_enable_cheats", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_hint_language_unlock", "lrps2_hint_language_unlock", "enabled", "disabled");
+
+            // RENDERER
             BindFeature(coreSettings, "pcsx2_renderer", "lrps2_renderer", "Auto");
 
-            if (SystemConfig["lrps2_renderer"] == "paraLLEl-GS")
+            switch (SystemConfig["lrps2_renderer"])
             {
-                retroarchConfig["video_driver"] = "vulkan";
-                _coreVideoDriverForce = true;
+                case "paraLLEl-GS":
+                case "Vulkan":
+                    retroarchConfig["video_driver"] = "vulkan";
+                    _coreVideoDriverForce = true;
+                    break;
+                case "D3D11":
+                    retroarchConfig["video_driver"] = "d3d11";
+                    _coreVideoDriverForce = true;
+                    break;
+                case "D3D12":
+                    retroarchConfig["video_driver"] = "d3d12";
+                    _coreVideoDriverForce = true;
+                    break;
+                case "OpenGL":
+                    retroarchConfig["video_driver"] = "glcore";
+                    _coreVideoDriverForce = true;
+                    break;
             }
 
+            // VIDEO
             BindFeatureSlider(coreSettings, "pcsx2_upscale_multiplier", "lrps2_upscale_multiplier", "1x Native (PS2)");
             BindFeature(coreSettings, "pcsx2_deinterlace_mode", "lrps2_deinterlace_mode", "Automatic");
             BindBoolFeatureOn(coreSettings, "pcsx2_nointerlacing_hint", "lrps2_nointerlacing_hint", "enabled", "disabled");
@@ -2780,28 +3414,85 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "pcsx2_dithering", "lrps2_dithering", "Unscaled");
             BindFeature(coreSettings, "pcsx2_blending_accuracy", "lrps2_blending_accuracy", "Basic");
             BindFeature(coreSettings, "pcsx2_widescreen_hint", "lrps2_widescreen_hint", "disabled");
+            BindFeature(coreSettings, "pcsx2_hw_download_mode", "lrps2_hw_download_mode", "Accurate");
             BindBoolFeatureOn(coreSettings, "pcsx2_pcrtc_antiblur", "lrps2_pcrtc_antiblur", "enabled", "disabled");
-            BindBoolFeatureOn(coreSettings, "pcsx2_game_enhancements_hint", "lrps2_game_enhancements_hint", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_pgs_disable_mipmaps", "lrps2_pgs_disable_mipmaps", "enabled", "disabled");
+
+            // EMULATION
+            BindBoolFeature(coreSettings, "pcsx2_game_enhancements_hint", "lrps2_game_enhancements_hint", "enabled", "disabled");
             BindFeature(coreSettings, "pcsx2_uncapped_framerate_hint", "lrps2_uncapped_framerate_hint", "disabled");
+            BindFeature(coreSettings, "pcsx2_ee_cycle_rate", "lrps2_ee_cycle_rate", "100% (Normal Speed)");
+            BindFeature(coreSettings, "pcsx2_ee_cycle_skip", "lrps2_ee_cycle_skip", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_mtvu", "lrps2_mtvu", "enabled", "disabled");
 
             // Parallel options
             BindFeature(coreSettings, "pcsx2_pgs_ssaa", "lrps2_pgs_ssaa", "Native");
-            BindBoolFeature(coreSettings, "pcsx2_pgs_high_res_scanout", "lrps2_pgs_high_res_scanout", "enabled", "disabled");
+            BindFeature(coreSettings, "pcsx2_pgs_high_res_scanout", "lrps2_pgs_high_res_scanout", "disabled");
 
-            if (SystemConfig.getOptBoolean("lrps2_pgs_high_res_scanout") && SystemConfig.isOptSet("lrps2_pgs_ssaa") && !SystemConfig["lrps2_pgs_ssaa"].Contains("can high-res"))
-                coreSettings["pcsx2_pgs_high_res_scanout"] = "disabled";
+            if (SystemConfig.isOptSet("lrps2_pgs_high_res_scanout") && SystemConfig["lrps2_pgs_high_res_scanout"] != "disabled")
+            {
+                string ssaa = SystemConfig.isOptSet("lrps2_pgs_ssaa") ? SystemConfig["lrps2_pgs_ssaa"] : "Native";
+
+                if (!ssaa.Contains("can high-res"))
+                    coreSettings["pcsx2_pgs_high_res_scanout"] = "disabled";
+                else if (SystemConfig["lrps2_pgs_high_res_scanout"].StartsWith("enabled (4x") && !ssaa.Contains("can high-res 4x"))
+                    coreSettings["pcsx2_pgs_high_res_scanout"] = "enabled";
+            }
+
+            // MANUAL HACKS
+            BindBoolFeature(coreSettings, "pcsx2_enable_hw_hacks", "lrps2_enable_hw_hacks", "enabled", "disabled");
+            BindFeature(coreSettings, "pcsx2_half_pixel_offset", "lrps2_half_pixel_offset", "disabled");
+            BindFeature(coreSettings, "pcsx2_round_sprite", "lrps2_round_sprite", "disabled");
+            BindFeature(coreSettings, "pcsx2_native_scaling", "lrps2_native_scaling", "disabled");
+            BindFeature(coreSettings, "pcsx2_texture_inside_rt", "lrps2_texture_inside_rt", "disabled");
+            BindFeature(coreSettings, "pcsx2_auto_flush", "lrps2_auto_flush", "disabled");
+            BindFeature(coreSettings, "pcsx2_gpu_target_clut", "lrps2_gpu_target_clut", "disabled");
+            BindFeature(coreSettings, "pcsx2_software_clut_render", "lrps2_software_clut_render", "disabled");
+            BindFeatureSlider(coreSettings, "pcsx2_cpu_sprite_size", "lrps2_cpu_sprite_size", "0");
+            BindFeature(coreSettings, "pcsx2_cpu_sprite_level", "lrps2_cpu_sprite_level", "Sprites Only");
+            BindBoolFeature(coreSettings, "pcsx2_align_sprite", "lrps2_align_sprite", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_merge_sprite", "lrps2_merge_sprite", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_force_sprite_position", "lrps2_force_sprite_position", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_unscaled_palette_draw", "lrps2_unscaled_palette_draw", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_gpu_palette_conversion", "lrps2_gpu_palette_conversion", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_preload_frame_data", "lrps2_preload_frame_data", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_disable_depth_conversion", "lrps2_disable_depth_conversion", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_framebuffer_conversion", "lrps2_framebuffer_conversion", "enabled", "disabled");
+            BindBoolFeature(coreSettings, "pcsx2_disable_partial_invalidation", "lrps2_disable_partial_invalidation", "enabled", "disabled");
 
             // CONTROLS
-            if (SystemConfig.isOptSet("lrps2_axis_scale") && !string.IsNullOrEmpty(SystemConfig["lrps2_axis_scale"]))
+            if (Features.IsSupported("lrps2_axis_scale"))
             {
-                string sensitivity = SystemConfig["lrps2_axis_scale"].ToIntegerString();
-                coreSettings["pcsx2_axis_scale1"] = sensitivity + "%";
-                coreSettings["pcsx2_axis_scale2"] = sensitivity + "%";
+                string sensitivity = SystemConfig.isOptSet("lrps2_axis_scale") && !string.IsNullOrEmpty(SystemConfig["lrps2_axis_scale"])
+                    ? SystemConfig["lrps2_axis_scale"].ToIntegerString() + "%"
+                    : "133%";   // core default
+
+                coreSettings["pcsx2_axis_scale1"] = sensitivity;
+                coreSettings["pcsx2_axis_scale2"] = sensitivity;
             }
-            else
+
+            if (Features.IsSupported("lrps2_axis_deadzone"))
             {
-                coreSettings["pcsx2_axis_scale1"] = "133%";
-                coreSettings["pcsx2_axis_scale2"] = "133%";
+                string deadzone = SystemConfig.isOptSet("lrps2_axis_deadzone") && !string.IsNullOrEmpty(SystemConfig["lrps2_axis_deadzone"])
+                    ? SystemConfig["lrps2_axis_deadzone"].ToIntegerString() + "%"
+                    : "15%";    // core default
+
+                coreSettings["pcsx2_axis_deadzone1"] = deadzone;
+                coreSettings["pcsx2_axis_deadzone2"] = deadzone;
+            }
+
+            if (Features.IsSupported("lrps2_analog_mode"))
+            {
+                string analog = SystemConfig.getOptBoolean("lrps2_analog_mode") ? "enabled" : "disabled";
+                coreSettings["pcsx2_analog_mode1"] = analog;
+                coreSettings["pcsx2_analog_mode2"] = analog;
+            }
+
+            if (Features.IsSupported("lrps2_rumble"))
+            {
+                string rumble = (SystemConfig.isOptSet("lrps2_rumble") && !SystemConfig.getOptBoolean("lrps2_rumble")) ? "disabled" : "100%";
+                coreSettings["pcsx2_enable_rumble1"] = rumble;
+                coreSettings["pcsx2_enable_rumble2"] = rumble;
             }
         }
 
@@ -2856,7 +3547,7 @@ namespace EmulatorLauncher.Libretro
             BindBoolFeature(coreSettings, "mame_alternate_renderer", "alternate_renderer", "enabled", "disabled");
             BindFeature(coreSettings, "mame_altres", "internal_resolution", "640x480");
             BindBoolFeature(coreSettings, "mame_cheats_enable", "cheats_enable", "enabled", "disabled");
-            BindBoolFeature(coreSettings, "mame_mame_4way_enable", "mame_mame_4way_enable", "enabled", "disabled");
+            BindFeature(coreSettings, "mame_mame_4way_enable", "mame_mame_4way_enable", "disabled");
             BindFeature(coreSettings, "mame_lightgun_mode", "lightgun_mode", "lightgun");
             BindFeature(coreSettings, "mame_rotation_mode", "mame_rotation_mode", "internal");
             BindBoolFeatureOn(coreSettings, "mame_thread_mode", "mame_thread_mode", "enabled", "disabled");
@@ -3744,8 +4435,13 @@ namespace EmulatorLauncher.Libretro
                 coreSettings["mupen64plus-BackgroundMode"] = "Stripped";
                 coreSettings["mupen64plus-EnableLegacyBlending"] = "False";
                 coreSettings["mupen64plus-txFilterIgnoreBG"] = "False";
-
             }
+
+            if (SystemConfig.isOptSet("mupen64plus_EnableCopyColorToRDRAM") && !string.IsNullOrEmpty(SystemConfig["mupen64plus_EnableCopyColorToRDRAM"]))
+                coreSettings["mupen64plus-EnableCopyColorToRDRAM"] = SystemConfig["mupen64plus_EnableCopyColorToRDRAM"];
+
+            if (SystemConfig.isOptSet("mupen64plus_ThreadedRenderer") && !string.IsNullOrEmpty(SystemConfig["mupen64plus_ThreadedRenderer"]))
+                coreSettings["mupen64plus-ThreadedRenderer"] = !SystemConfig.getOptBoolean("mupen64plus_ThreadedRenderer") ? "False" : "True";
 
             // Hi Res textures methods
             string texturePack = SystemConfig.isOptSet("TexturesPack") ? SystemConfig["TexturesPack"] : "disabled";
@@ -3824,6 +4520,7 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "mupen64plus-CorrectTexrectCoords", "mupen64plus-CorrectTexrectCoords", "Off");
             BindFeature(coreSettings, "mupen64plus-FXAA", "mupen64plus-FXAA", "0");
             BindFeature(coreSettings, "mupen64plus-RDRAMImageDitheringMode", "mupen64plus-RDRAMImageDitheringMode", "False");
+            BindBoolFeature(coreSettings, "mupen64plus-EnableHWLighting", "mupen64plus-EnableHWLighting", "True", "False");
 
             // Parallel
             BindFeature(coreSettings, "mupen64plus-parallel-rdp-deinterlace-method", "mupen64plus-parallel-rdp-deinterlace-method", "Bob");
@@ -3903,14 +4600,13 @@ namespace EmulatorLauncher.Libretro
                 return;
 
             // nand region
-            string nand = "dsi_nand.bin";
-            if (SystemConfig.isOptSet("melondsds_nandregion") && !string.IsNullOrEmpty(SystemConfig["melondsds_nandregion"]))
+            string nand = "/auto";
+            if (SystemConfig.isOptSet("melondsds_nandregion") && !string.IsNullOrEmpty(SystemConfig["melondsds_nandregion"]) && !SystemConfig["melondsds_nandregion"].Equals("AUTO", StringComparison.OrdinalIgnoreCase))
             {
-                
                 string region = SystemConfig["melondsds_nandregion"].ToLowerInvariant();
                 string biosPath = AppConfig.GetFullPath("bios");
                 var nandFiles = Directory.GetFiles(biosPath, "dsi_nand*.bin");
-                
+
                 if (nandFiles.Length > 0)
                 {
                     foreach (var file in nandFiles)
@@ -3948,13 +4644,16 @@ namespace EmulatorLauncher.Libretro
             BindFeature(coreSettings, "melonds_screen_layout1", "melondsds_screen_layout1", "top-bottom");
             BindFeature(coreSettings, "melonds_screen_layout2", "melondsds_screen_layout2", "right-left");
 
+            BindFeatureSlider(coreSettings, "melonds_secondary_screen_scale", "melondsds_secondary_screen_scale", "100");
+            BindFeature(coreSettings, "melonds_secondary_screen_filtering", "melondsds_secondary_screen_filtering", "nearest");
+
             // Firmware
             BindFeature(coreSettings, "melonds_firmware_language", "melondsds_language", "auto");
             BindFeature(coreSettings, "melonds_console_mode", "melondsds_console", "ds");
             BindBoolFeature(coreSettings, "melonds_boot_mode", "melondsds_boot", "native", "direct");
 
             if (SystemConfig["melondsds_console"] == "dsi")
-                coreSettings["melonds_firmware_nds_path"] = "dsi_firmware.bin";
+                coreSettings["melonds_firmware_dsi_path"] = "dsi_firmware.bin";
             else
                 coreSettings["melonds_firmware_nds_path"] = "firmware.bin";
 
@@ -3974,6 +4673,12 @@ namespace EmulatorLauncher.Libretro
             // Microphone
             BindFeature(coreSettings, "melonds_mic_input", "melonds_mic_input", "blow");
             BindFeature(coreSettings, "melonds_mic_input_active", "melonds_mic_input_active", "hold");
+
+            // Controls
+            BindFeature(coreSettings, "melonds_joystick_cursor_deadzone", "melondsds_joystick_deadzone", "5");
+            BindFeature(coreSettings, "melonds_joystick_cursor_maxspeed", "melondsds_joystick_maxspeed", "3");
+            BindFeature(coreSettings, "melonds_joystick_cursor_response", "melondsds_joystick_response", "200");
+            BindFeature(coreSettings, "melonds_joystick_cursor_speedup", "melondsds_joystick_speedup", "200");
         }
 
         private void ConfiguremGBA(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
@@ -4391,9 +5096,9 @@ namespace EmulatorLauncher.Libretro
             }
 
             if (Controllers.Count > 5)
-                coreSettings["pcsx_rearmed_multitap"] = "both";
+                coreSettings["pcsx_rearmed_multitap"] = "ports 1 and 2";
             else if (Controllers.Count > 2)
-                coreSettings["pcsx_rearmed_multitap"] = "port 1 only";
+                coreSettings["pcsx_rearmed_multitap"] = "port 1";
             else
                 coreSettings["pcsx_rearmed_multitap"] = "disabled";
 
@@ -4604,7 +5309,7 @@ namespace EmulatorLauncher.Libretro
             }
 
             BindFeature(coreSettings, "ppsspp_cpu_core", "ppsspp_cpu_core", "JIT");
-            BindFeature(coreSettings, "ppsspp_inflight_frames", "ppsspp_inflight_frames", "Up to 2");
+            BindFeature(coreSettings, "ppsspp_inflight_frames", "ppsspp_inflight_frames", "Up to 1");
             BindFeature(coreSettings, "ppsspp_internal_resolution", "ppsspp_internal_resolution", "480x272");
             BindFeature(coreSettings, "ppsspp_texture_anisotropic_filtering", "ppsspp_texture_anisotropic_filtering", "disabled");
             BindFeature(coreSettings, "ppsspp_texture_filtering", "ppsspp_texture_filtering", "Auto");
@@ -5669,6 +6374,35 @@ namespace EmulatorLauncher.Libretro
                 guntype = SystemConfig["ymir_guntype"];
 
             SetupLightGuns(retroarchConfig, guntype, core);
+        }
+
+        private void ConfigureZc255(ConfigFile retroarchConfig, ConfigFile coreSettings, string system, string core)
+        {
+            if (core != "zc255")
+                return;
+
+            // Engine data, soundfont and sound effects are embedded in the DLL: nothing is needed in the bios folder
+
+            // Same key as the ZQuest Classic standalone, so both emulators of the system share the choice
+            if (SystemConfig.getOptBoolean("zc_swap_buttons"))
+            {
+                coreSettings["zc255_ab_layout"] = "swapped";
+                coreSettings["zc255_xy_layout"] = "swapped";
+            }
+            else
+            {
+                coreSettings["zc255_ab_layout"] = "normal";
+                coreSettings["zc255_xy_layout"] = "normal";
+            }
+
+            // Core default is off, but most users expect the stick to move the hero
+            BindBoolFeatureOn(coreSettings, "zc255_analog_dpad", "zc_analog_dpad", "enabled", "disabled");
+
+            // Never leave a pending "clear saved progress" request in the global core options file
+            coreSettings["zc255_clear_progress"] = "keep";
+
+            // Cheat options (zc255_cheats_enabled, invulnerability, walls, R2 refills) are not bound:
+            // they stay editable in RetroArch Quick Menu > Core Options and are kept between sessions
         }
         #endregion
     }

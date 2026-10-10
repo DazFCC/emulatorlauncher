@@ -19,7 +19,9 @@ namespace EmulatorLauncher
         private void SetupGunQT(IniFile pcsx2ini, string path)
         {
             if (!SystemConfig.getOptBoolean("use_guns"))
+            {
                 return;
+            }
 
             if (Program.SystemConfig.isOptSet("disableautocontrollers") && Program.SystemConfig["disableautocontrollers"] == "1")
                 UpdateSdlControllersWithHints();
@@ -44,14 +46,13 @@ namespace EmulatorLauncher
             string techPadNumber = null;
             string tech = "";
             bool guninvert = SystemConfig.getOptBoolean("gun_invert");
-            bool azerty = SystemConfig.getOptBoolean("pcsx2_azerty_start");
+            bool azerty = SystemConfig.getOptBoolean("pcsx2_azerty_start") || (!SystemConfig.isOptSet("pcsx2_azerty_start") && azertyLayouts.Contains(CultureInfo.CurrentCulture.KeyboardLayoutId));
 
             var guns = RawLightgun.GetRawLightguns();
 
             if (guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
             {
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
 
                 if (_isArcade && !SystemConfig.isOptSet("pcsx2x6_sindenborder"))
                 {

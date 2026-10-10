@@ -44,9 +44,11 @@ namespace EmulatorLauncher
 
         private static readonly Dictionary<string, string> emulatorAppName = new Dictionary<string, string>()
         {
+            { "arcadeduck", "ArcadeDuck" },
             { "ares", "ares" },
             { "bigpemu", "BigPEmu" },
             { "bizhawk", "EmuHawk" },
+            { "blastem", "blastem" },
             { "cgenius", "CGenius" },
             { "desmume", "DeSmuME-VS2022-x64-Release" },
             { "dolphin", "Dolphin" },
@@ -96,6 +98,23 @@ namespace EmulatorLauncher
         #region emulators Hotkey Info
         private static readonly EmulatorHotkey[] EmulatorHotkeys = new EmulatorHotkey[]
         {
+            new EmulatorHotkey("arcadeduck", new EmulatorHotkeyInfo[]
+                {
+                    new EmulatorHotkeyInfo("input_menu_toggle", "OpenPauseMenu", "F1"),
+                    new EmulatorHotkeyInfo("input_toggle_fullscreen", "ToggleFullscreen", "F"),
+                    new EmulatorHotkeyInfo("input_hold_fast_forward", "FastForward", "L"),
+                    new EmulatorHotkeyInfo("input_rewind", "Rewind", "Backspace"),
+                    new EmulatorHotkeyInfo("input_toggle_fast_forward", "ToggleFastForward", "Space"),
+                    new EmulatorHotkeyInfo("input_frame_advance", "FrameStep", "K"),
+                    new EmulatorHotkeyInfo("input_screenshot", "Screenshot", "F8"),
+                    new EmulatorHotkeyInfo("input_save_state", "SaveSelectedSaveState", "F2"),
+                    new EmulatorHotkeyInfo("input_load_state", "LoadSelectedSaveState", "F4"),
+                    new EmulatorHotkeyInfo("input_state_slot_decrease", "SelectPreviousSaveStateSlot", "F6"),
+                    new EmulatorHotkeyInfo("input_state_slot_increase", "SelectNextSaveStateSlot", "F7"),
+                    new EmulatorHotkeyInfo("input_pause_toggle", "TogglePause", "P"),
+                    new EmulatorHotkeyInfo("input_exit_emulator", "PowerOff", "Escape")
+                }),
+
             new EmulatorHotkey("ares", new EmulatorHotkeyInfo[]
                 {
                     new EmulatorHotkeyInfo("input_toggle_fullscreen", "ToggleFullscreen", "0x1/0/40;;"),        // f
@@ -136,6 +155,20 @@ namespace EmulatorLauncher
                     new EmulatorHotkeyInfo("input_exit_emulator", "Exit Program", "Escape"),
                     new EmulatorHotkeyInfo("input_toggle_fullscreen", "Full Screen", "F"),
                     new EmulatorHotkeyInfo("input_frame_advance", "Frame Advance", "K")
+                }),
+
+            new EmulatorHotkey("blastem", new EmulatorHotkeyInfo[]
+                {
+                    new EmulatorHotkeyInfo("input_exit_emulator", "ui.exit", "esc"),                  // esc
+                    new EmulatorHotkeyInfo("input_menu_toggle", "ui.menu", "f1"),                     // F1
+                    new EmulatorHotkeyInfo("input_save_state", "ui.save_state", "f2"),                // F2
+                    new EmulatorHotkeyInfo("input_load_state", "ui.load_state", "f4"),                // F4
+                    new EmulatorHotkeyInfo("input_screenshot", "ui.screenshot", "f8"),                // F8
+                    new EmulatorHotkeyInfo("input_pause_toggle", "ui.pause", "p"),                    // P
+                    new EmulatorHotkeyInfo("input_toggle_fullscreen", "ui.toggle_fullscreen", "f"),   // F
+                    new EmulatorHotkeyInfo("input_frame_advance", "ui.advance", "k"),                 // K
+                    new EmulatorHotkeyInfo("input_hold_fast_forward", "ui.next_speed", "l"),          // L
+                    new EmulatorHotkeyInfo("input_rewind", "ui.prev_speed", "backspace")              // backspace
                 }),
 
             new EmulatorHotkey("cgenius", new EmulatorHotkeyInfo[]

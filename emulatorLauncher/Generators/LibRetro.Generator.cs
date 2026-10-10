@@ -51,9 +51,25 @@ namespace EmulatorLauncher.Libretro
         private string _dosBoxTempRom;
         private bool _bias = true;
         private bool _overrideAspect = false;
+        private bool _ps5RumbleEnvSet = false;
 
         public override ProcessStartInfo Generate(string system, string emulator, string core, string rom, string playersControllers, ScreenResolution resolution)
         {
+            Environment.SetEnvironmentVariable("RETROBAT_LIBRETRO_REAL_CORE", null);
+
+            // RetroArch sdl2 joypad driver sets SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE only after SDL_InitSubSystem,
+            // and never sets the PS5 hint: DualSense over Bluetooth stays in simple report mode (no rumble/LED/gyro).
+            // Environment variables are read by SDL during device init and take precedence over normal-priority hints.
+            // Do not override a value explicitly set by the user.
+            if (!SystemConfig.isOptSet("ps_controller_enhanced") || Program.SystemConfig.getOptBoolean("ps_controller_enhanced"))
+            {
+                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SDL_JOYSTICK_HIDAPI_PS5_RUMBLE")))
+                {
+                    Environment.SetEnvironmentVariable("SDL_JOYSTICK_HIDAPI_PS5_RUMBLE", "1");
+                    _ps5RumbleEnvSet = true;
+                }
+            }
+
             if (string.IsNullOrEmpty(RetroarchPath))
                 return null;
 
@@ -135,6 +151,9 @@ namespace EmulatorLauncher.Libretro
             string logFile = Path.Combine(Program.LocalPath, ".emulationstation", "es_launch_stdout.log");
             string logCommand = $"--log-file \"{LogFile}\" -verbose ";
 
+            // Core file passed to RetroArch : retroarch\cores, or a proxy core in retroarch\core_proxy
+            string coreFile = GetCoreFileToLoad(core);
+
             // manage MESS systems (MAME core)
             MessSystem messSystem = core == "mame" ? MessSystem.GetMessSystem(system, subCore) : null;
             if (messSystem != null && !string.IsNullOrEmpty(messSystem.MachineName))
@@ -149,7 +168,7 @@ namespace EmulatorLauncher.Libretro
                 {
                     FileName = Path.Combine(RetroarchPath, emulator == "angle" ? "retroarch_angle.exe" : "retroarch.exe"),
                     WorkingDirectory = RetroarchPath,
-                    Arguments = (logCommand + "-L \"" + Path.Combine(RetroarchCorePath, core + "_libretro.dll") + "\" " + messArgs).Trim()
+                    Arguments = (logCommand + "-L \"" + coreFile + "\" " + messArgs).Trim()
                 };
             }
 
@@ -162,16 +181,16 @@ namespace EmulatorLauncher.Libretro
             if (patchArgs.Count > 0)
             {
                 if (string.IsNullOrEmpty(rom))
-                    finalArgs = (patchArg + " -L \"" + Path.Combine(RetroarchCorePath, core + "_libretro.dll") + "\" " + args).Trim();
+                    finalArgs = (patchArg + " -L \"" + coreFile + "\" " + args).Trim();
                 else
-                    finalArgs = (patchArg + " -L \"" + Path.Combine(RetroarchCorePath, core + "_libretro.dll") + "\" \"" + rom + "\" " + args).Trim();
+                    finalArgs = (patchArg + " -L \"" + coreFile + "\" \"" + rom + "\" " + args).Trim();
             }
             else
             {
                 if (string.IsNullOrEmpty(rom))
-                    finalArgs = ("-L \"" + Path.Combine(RetroarchCorePath, core + "_libretro.dll") + "\" " + args).Trim();
+                    finalArgs = ("-L \"" + coreFile + "\" " + args).Trim();
                 else
-                    finalArgs = ("-L \"" + Path.Combine(RetroarchCorePath, core + "_libretro.dll") + "\" \"" + rom + "\" " + args).Trim();
+                    finalArgs = ("-L \"" + coreFile + "\" \"" + rom + "\" " + args).Trim();
             }
 
             return new ProcessStartInfo()
@@ -197,7 +216,8 @@ namespace EmulatorLauncher.Libretro
         {
             int ret = base.RunAndWait(path);
             bool generic = false;
-            if (ret == 1 && File.Exists(LogFile))
+
+            if (RawExitCode == 1 && File.Exists(LogFile))
             {
                 var line = File.ReadAllLines(LogFile).FirstOrDefault(s => s != null && s.StartsWith("[libretro ERROR]"));
                 if (string.IsNullOrEmpty(line))
@@ -223,8 +243,17 @@ namespace EmulatorLauncher.Libretro
 
         public override void Cleanup()
         {
+            Environment.SetEnvironmentVariable("RETROBAT_LIBRETRO_REAL_CORE", null);
+
             if (SystemConfig["core"] == "atari800")
                 Environment.SetEnvironmentVariable("HOME", CurrentHomeDirectory);
+
+            // Remove the DualSense hint only if it was set by RetroBat
+            if (_ps5RumbleEnvSet)
+            {
+                Environment.SetEnvironmentVariable("SDL_JOYSTICK_HIDAPI_PS5_RUMBLE", null);
+                _ps5RumbleEnvSet = false;
+            }
 
             if (_dosBoxTempRom != null && File.Exists(_dosBoxTempRom))
                 File.Delete(_dosBoxTempRom);
@@ -240,9 +269,6 @@ namespace EmulatorLauncher.Libretro
                 _stateFileManager.Dispose();
                 _stateFileManager = null;
             }
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
 
             // Kill java processes as there is a bug where sound continues even when retroarch is closed
             if (SystemConfig["core"] == "freej2me")
@@ -318,6 +344,37 @@ namespace EmulatorLauncher.Libretro
             }
 
             return core;
+        }
+
+        /// <summary>
+        /// File passed to RetroArch with -L.
+        /// A plugin can place a proxy core under the same name in retroarch\core_proxy (for example a wrapper
+        /// that loads the real core from RETROBAT_LIBRETRO_REAL_CORE). The real core stays in the configured
+        /// core directory, where it is checked and updated as usual. Without a proxy file, or when
+        /// libretro_coreproxy is disabled, the real core is loaded directly.
+        /// </summary>
+        private string GetCoreFileToLoad(string core)
+        {
+            string coreFile = Path.Combine(RetroarchCorePath, core + "_libretro.dll");
+
+            bool proxyEnabled = !SystemConfig.isOptSet("libretro_coreproxy") || SystemConfig.getOptBoolean("libretro_coreproxy");
+            if (!proxyEnabled)
+                return coreFile;
+
+            try
+            {
+                string proxyFile = Path.Combine(RetroarchPath, "core_proxy", core + "_libretro.dll");
+                if (File.Exists(proxyFile) && File.Exists(coreFile))
+                {
+                    string realCoreFile = Path.GetFullPath(coreFile);
+                    SimpleLogger.Instance.Info("[LibretroGenerator] Using proxy core: " + proxyFile + " (real core: " + realCoreFile + ")");
+                    Environment.SetEnvironmentVariable("RETROBAT_LIBRETRO_REAL_CORE", realCoreFile);
+                    return proxyFile;
+                }
+            }
+            catch { }
+
+            return coreFile;
         }
 
         private void CheckCoreAndUpdateIfNeeded(string core)
@@ -492,20 +549,6 @@ namespace EmulatorLauncher.Libretro
                     rom = newRom;
             }
 
-
-            // m3u management in some cases
-            if (core == "mednafen_pce" || core == "mednafen_pce_fast")
-            {
-                if (Path.GetExtension(rom).ToLower() == ".m3u")
-                {
-                    string tempRom = File.ReadLines(rom).FirstOrDefault();
-                    if (File.Exists(tempRom))
-                        rom = tempRom;
-                    else
-                        rom = Path.Combine(Path.GetDirectoryName(rom), tempRom);
-                }
-            }
-
             // dosbox core specifics
             if (core != null && core.IndexOf("dosbox", StringComparison.InvariantCultureIgnoreCase) >= 0)
             {
@@ -618,7 +661,7 @@ namespace EmulatorLauncher.Libretro
             if (AppConfig.isOptSet("shaders") && SystemConfig.isOptSet("shader") && SystemConfig["shader"] != "None")
             {
                 string videoDriver = ConfigFile.FromFile(Path.Combine(RetroarchPath, "retroarch.cfg"))["video_driver"];
-                bool isOpenGL = (emulator != "angle") && (!coreNoGL.Contains(core)) && (videoDriver == "gl" || coreGLCompat.Contains(core));
+                bool isOpenGL = (emulator != "angle") && (!coreNoGL.Contains(core)) && videoDriver == "gl" && !(core == "parallel_n64" && SystemConfig["parallel_gfx_plugin"] == "parallel");
                 bool dx12 = videoDriver == "d3d12";
 
                 string path = Path.Combine(AppConfig.GetFullPath("shaders"), "configs", SystemConfig["shaderset"], "rendering-defaults.yml");
@@ -1119,24 +1162,16 @@ namespace EmulatorLauncher.Libretro
             // Resolution & monitor
             bool forcefs = SystemConfig.getOptBoolean("forcefullscreen");
             bool exclusivefs = SystemConfig.getOptBoolean("exclusivefs");
-            int test = Screen.AllScreens.Length;
             if (Features.IsSupported("MonitorIndex"))
             {
-                if (SystemConfig.isOptSet("MonitorIndex"))
-                {
-                    int monitorId;
-                    if (int.TryParse(SystemConfig["MonitorIndex"], out monitorId) && monitorId <= Screen.AllScreens.Length)
-                        retroarchConfig["video_monitor_index"] = (monitorId).ToString();
-                }
-                else
-                {
-                    retroarchConfig["video_monitor_index"] = "0";
-                }
+                // RetroArch : 0 = auto, 1..N = 1-based on the order of EnumDisplayMonitors
+                int raIndex = Displays.IndexOf(Program.TargetScreen, MonitorOrder.EnumDisplayMonitors);
+                retroarchConfig["video_monitor_index"] = raIndex < 0 ? "0" : (raIndex + 1).ToString();
             }
 
             if (resolution == null)
             {
-                var res = ScreenResolution.CurrentResolution;
+                var res = GetTargetScreenResolution();
                 retroarchConfig["video_fullscreen_x"] = res.Width.ToString();
                 retroarchConfig["video_fullscreen_y"] = res.Height.ToString();
                 retroarchConfig["video_refresh_rate"] = res.DisplayFrequency.ToString("N6", System.Globalization.CultureInfo.InvariantCulture);
@@ -1172,7 +1207,7 @@ namespace EmulatorLauncher.Libretro
             }
             else if (IsEmulationStationWindowed())
             {
-                var res = ScreenResolution.CurrentResolution;
+                var res = GetTargetScreenResolution();
                 bool identicalRes = resolution.Width == res.Width && resolution.Height == res.Height;
 
                 retroarchConfig["video_fullscreen_x"] = resolution.Width.ToString();
@@ -1197,7 +1232,7 @@ namespace EmulatorLauncher.Libretro
 
             else
             {
-                var res = ScreenResolution.CurrentResolution;
+                var res = GetTargetScreenResolution();
                 bool isNativeResolution = resolution.Width == res.Width && resolution.Height == res.Height;
                 float dpiScale = isNativeResolution ? 1.0f : GetDpiScaleFactor();
                 int physicalWidth = (int)(resolution.Width * dpiScale);
@@ -1213,7 +1248,7 @@ namespace EmulatorLauncher.Libretro
             }
 
             if (resolution == null && retroarchConfig["video_monitor_index"] != "0")
-                resolution = ScreenResolution.FromScreenIndex(retroarchConfig["video_monitor_index"].ToInteger() - 1);
+                resolution = ScreenResolution.FromScreen(Program.TargetScreen);
 
             // Folders
             if (!string.IsNullOrEmpty(AppConfig["bios"]))
@@ -1222,6 +1257,14 @@ namespace EmulatorLauncher.Libretro
                     retroarchConfig["system_directory"] = AppConfig.GetFullPath("bios");
                 else if (retroarchConfig["system_directory"] != @":\system" && !Directory.Exists(retroarchConfig["system_directory"]))
                     retroarchConfig["system_directory"] = @":\system";
+
+                if (coreSystemSubfolder.Contains(core))
+                {
+                    string coreSubfolder = Path.Combine(AppConfig.GetFullPath("bios"), core);
+                    FileTools.TryCreateDirectory(coreSubfolder);
+                    if (Directory.Exists(coreSubfolder))
+                        retroarchConfig["system_directory"] = coreSubfolder;
+                }
 
                 if (SystemConfig.isOptSet("bios_overrides") && !string.IsNullOrEmpty(SystemConfig["bios_overrides"]))
                 {
@@ -1255,6 +1298,9 @@ namespace EmulatorLauncher.Libretro
 
             if (core == "mame")
                 savePath = Path.Combine(AppConfig.GetFullPath("saves"));
+
+            else if (core == "amiberry")
+                savePath = Path.Combine(AppConfig.GetFullPath("saves"), system, "LR-amiberry");
 
             FileTools.TryCreateDirectory(savePath);
             retroarchConfig["savefile_directory"] = savePath;
@@ -1394,6 +1440,10 @@ namespace EmulatorLauncher.Libretro
             else if (SystemConfig["shader"].Contains("Mega_Bezel"))
             {
                 retroarchConfig["aspect_ratio_index"] = ratioIndexes.IndexOf("full").ToString();
+
+                // Mega Bezel presets draw their own bezel: disable decorations unless explicitly selected by the user
+                if (!SystemConfig.isOptSet("bezel"))
+                    SystemConfig["bezel"] = "none";
             }
             else
             {
@@ -1402,7 +1452,14 @@ namespace EmulatorLauncher.Libretro
 
             // Rewind
             if (!SystemConfig.isOptSet("rewind"))
-                retroarchConfig["rewind_enable"] = coreNoRewind.Contains(core) ? "false" : "true"; // AUTO
+            {
+                // AUTO: enable only if the core supports it and its state is light enough to be saved every frame
+                bool autoRewind = !coreNoRewind.Contains(core)
+                                  && !coreNoAutoRewind.Contains(core)
+                                  && !systemNoAutoRewind.Contains(system);
+
+                retroarchConfig["rewind_enable"] = autoRewind ? "true" : "false";
+            }
             else if (SystemConfig.getOptBoolean("rewind"))
                 retroarchConfig["rewind_enable"] = "true";
             else
@@ -1410,7 +1467,6 @@ namespace EmulatorLauncher.Libretro
 
             // Audio
             // xaudio only works if dx9 is installed on the system
-
             string defaultaudioDriver = HasXAudio27() ? "xaudio" : "wasapi";
 
             BindFeature(retroarchConfig, "audio_driver", "audio_driver", defaultaudioDriver);
@@ -1579,6 +1635,51 @@ namespace EmulatorLauncher.Libretro
                 retroarchConfig["rewind_enable"] = "false";
             }
 
+            // ---- Rewind buffer for cores with a very large state ----
+            const long largeRewindBuffer = 268435456;               // 256 MB, largest state is flycast Naomi 2 (~90 MB)
+            const string largeRewindBufferValue = "268435456";
+            const int largeRewindGranularity = 4;                   // value forced for zc255, also used to undo it
+
+            int minGranularity;
+            if (coreLargeRewindState.TryGetValue(core, out minGranularity))
+            {
+                if (retroarchConfig["rewind_enable"] == "true")
+                {
+                    long currentBuffer;
+                    if (!long.TryParse(retroarchConfig["rewind_buffer_size"], out currentBuffer))
+                        currentBuffer = 20971520;                   // RetroArch default (20 MB)
+                    else if (currentBuffer < 10000)
+                        currentBuffer *= 1024 * 1024;               // RetroArch reads values below 10000 as MB (configuration.c)
+
+                    // Only raise values that are too small, to keep a value set by the user
+                    if (currentBuffer < largeRewindBuffer)
+                    {
+                        SimpleLogger.Instance.Info("[INFO] Rewind buffer too small for '" + core + "', raising it to 256 MB");
+                        retroarchConfig["rewind_buffer_size"] = largeRewindBufferValue;
+                    }
+
+                    if (minGranularity > 1)
+                    {
+                        // Capturing every frame is too slow for this core
+                        int currentGranularity;
+                        if (!int.TryParse(retroarchConfig["rewind_granularity"], out currentGranularity) || currentGranularity < minGranularity)
+                            retroarchConfig["rewind_granularity"] = minGranularity.ToString();
+                    }
+                    else if (retroarchConfig["rewind_buffer_size"] == largeRewindBufferValue && retroarchConfig["rewind_granularity"] == largeRewindGranularity.ToString())
+                    {
+                        // Undo the granularity left by a previous zc255 session
+                        retroarchConfig["rewind_granularity"] = "1";
+                    }
+                }
+            }
+            else if (retroarchConfig["rewind_buffer_size"] == largeRewindBufferValue)
+            {
+                // Undo the values set by a previous session of such a core, never a value set by the user
+                retroarchConfig["rewind_buffer_size"] = "20971520";
+                if (retroarchConfig["rewind_granularity"] == largeRewindGranularity.ToString())
+                    retroarchConfig["rewind_granularity"] = "1";
+            }
+
             // ---- Run-ahead & preemptive frames (min level: DETERMINISTIC) ----
             bool wantRunahead = SystemConfig.isOptSet("runahead") && SystemConfig["runahead"].ToIntegerString().ToInteger() > 0;
             bool wantPreempt = SystemConfig.isOptSet("preemptive_frames") && SystemConfig.getOptBoolean("preemptive_frames");
@@ -1623,6 +1724,9 @@ namespace EmulatorLauncher.Libretro
             if (!Features.IsSupported("video_driver"))
                 return;
 
+            if (SystemConfig["ratio"] == "custom")
+                retroarchConfig["video_viewport_bias_y"] = "0.000000";
+
             // Return if driver was forced in core settings
             if (_coreVideoDriverForce)
             {
@@ -1630,16 +1734,16 @@ namespace EmulatorLauncher.Libretro
                 return;
             }
 
-            // Default to d3d11: widest hardware coverage on Windows (feature level 10_0),
-            // no dependency on the vendor OpenGL ICD. RetroArch forces the right driver
-            // for HW-rendered cores anyway (video_driver.c: video_driver_find_driver).
+            // Default to d3d11: widest hardware coverage on Windows
             retroarchConfig["video_driver"] = _video_driver = "d3d11";
 
             // general, assigned selected core
-            if (SystemConfig.isOptSet("video_driver"))
+            if (SystemConfig.isOptSet("video_driver") && !string.IsNullOrEmpty(SystemConfig["video_driver"]))
             {
                 _video_driver = SystemConfig["video_driver"];
                 retroarchConfig["video_driver"] = SystemConfig["video_driver"];
+                SimpleLogger.Instance.Info("[VIDEO] User-defined video driver: " + _video_driver);
+                return;
             }
 
             if (core.StartsWith("mupen64"))
@@ -1650,18 +1754,6 @@ namespace EmulatorLauncher.Libretro
                     retroarchConfig["video_driver"] = "vulkan";
                     return;
                 }
-            }
-            if (core == "pcsx2" && retroarchConfig["video_driver"] == "gl")
-            {
-                _video_driver = "glcore";
-                retroarchConfig["video_driver"] = "glcore";
-                return;
-            }
-            if (core == "scummvm" && (retroarchConfig["video_driver"] != "gl" && retroarchConfig["video_driver"] != "glcore"))
-            {
-                _video_driver = "glcore";
-                retroarchConfig["video_driver"] = "glcore";
-                return;
             }
 
             // Set default video driver per core
@@ -1687,9 +1779,6 @@ namespace EmulatorLauncher.Libretro
                     }
                 }
             }
-
-            if (SystemConfig["ratio"] == "custom")
-                retroarchConfig["video_viewport_bias_y"] = "0.000000";
         }
 
         private void ConfigureGPUIndex(ConfigFile retroarchConfig)
@@ -2055,6 +2144,7 @@ namespace EmulatorLauncher.Libretro
         {
             retroarchConfig["input_overlay_hide_in_menu"] = "false";
             retroarchConfig["input_overlay_enable"] = "false";
+            retroarchConfig["input_overlay_behind_menu"] = "true";
             retroarchConfig["video_message_pos_x"] = "0.05";
             retroarchConfig["video_message_pos_y"] = "0.05";
 
@@ -2130,8 +2220,8 @@ namespace EmulatorLauncher.Libretro
 
             int resX = (resolution == null ? Screen.PrimaryScreen.Bounds.Width : resolution.Width);
             int resY = (resolution == null ? Screen.PrimaryScreen.Bounds.Height : resolution.Height);
-            
-            var currentRes = ScreenResolution.CurrentResolution;
+
+            var currentRes = GetTargetScreenResolution();
             bool isNativeResolution = resolution == null ||
                 (resolution.Width == currentRes.Width && resolution.Height == currentRes.Height);
 
@@ -2448,41 +2538,72 @@ namespace EmulatorLauncher.Libretro
         // List and dictionaries
         static readonly List<string> ratioIndexes = new List<string> { "4/3", "16/9", "16/10", "16/15", "21/9", "1/1", "2/1", "3/2", "3/4", "4/1", "4/4", "5/4", 
             "6/5", "7/9", "8/3", "8/7", "19/12", "19/14", "30/17", "32/9", "config", "squarepixel", "core", "custom", "full" };
-        static readonly List<string> capsimgCore = new List<string>() { "hatari", "hatarib", "puae" };
-        static readonly List<string> hdrCompatibleVideoDrivers = new List<string>() { "d3d12", "d3d11", "vulkan" };
-        static List<string> coreNoGL = new List<string>() { "azahar", "citra", "dolphin", "flycast", "kronos", "mednafen_psx_hw", "melonds", "melondsds", "mupen64plus_next", 
-            "pcsx2", "supermodel", "swanstation", "vecx" };
-        
-        // Level DISABLED - no savestate support at all
-        static List<string> coreNoSavestate = new List<string>() { "arduous", "b2", "bennugd", "boom3", "boom3_xp", "cannonball", "dice", "dinothawr", "doukutsu_rs", "easyrpg", "freej2me", "frodo", "gw", "lowresnx", "mame2010", "mame2014", "mame2016", "nxengine", "openlara", "pd777", "pocketcdg", "retro8", "same_cdi", "scummvm", "superbroswar", "tyrquake", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero" };
 
+        // Cores using a dedicated subfolder of the bios folder as system directory
+        static List<string> coreSystemSubfolder = new List<string>() { "amiberry" };
+
+        static readonly List<string> capsimgCore = new List<string>() { "amiberry", "hatari", "hatarib", "puae" };
+        static readonly List<string> hdrCompatibleVideoDrivers = new List<string>() { "d3d12", "d3d11", "vulkan" };
+        static List<string> coreNoGL = new List<string>() { "azahar", "citra", "dolphin", "kronos", "melonds", "melondsds", "mupen64plus_next",
+            "pcsx2", "play", "supermodel", "swanstation", "vecx", "vircon32" };
+
+        // Level DISABLED - no savestate support at all
+        static List<string> coreNoSavestate = new List<string>() { "arduous", "b2", "bennugd", "boom3", "boom3_xp", "cannonball", "cemu", "dice", "dinothawr", "doukutsu_rs", "easyrpg", "emux_gb", 
+            "emux_nes", "emux_sms", "freej2me", "frodo", "gw", "lowresnx", "mame2010", "mame2014", "mame2016", "nxengine", "openlara", "pd777", "pocketcdg", "retro8", "same_cdi", "scummvm", 
+            "superbroswar", "tyrquake", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero" };
         // Level < SERIALIZED - no rewind (core_info.c:3092)
-        static List<string> coreNoRewind = new List<string>() { "arduous", "azahar", "b2", "bennugd", "boom3", "boom3_xp", "cannonball", "citra", "dice", "dinothawr", "dolphin", "doukutsu_rs", "easyrpg", "ecwolf", "freej2me", "frodo", "gw", "kronos", "lowresnx", "mame2000", "mame2003", "mame2003_midway", "mame2003_plus", "mame2010", "mame2014", "mame2016", "nxengine", "o2em", "openlara", "opera", "pcsx2", "pd777", "pocketcdg", "prboom", "retro8", "same_cdi", "sameduck", "scummvm", "superbroswar", "swanstation", "tic80", "tyrquake", "uzem", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero", "yabasanshiro" };
+        static List<string> coreNoRewind = new List<string>() { "arduous", "azahar", "b2", "bennugd", "boom3", "boom3_xp", "cannonball", "cemu", "citra", "dice", "dinothawr", "dolphin", 
+            "doukutsu_rs", "easyrpg", "ecwolf", "emux_gb", "emux_nes", "emux_sms", "freej2me", "frodo", "gw", "kronos", "lowresnx", "mame2000", "mame2003", "mame2003_midway", "mame2003_plus", 
+            "mame2010", "mame2014", "mame2016", "nxengine", "o2em", "openlara", "opera", "pcsx2", "pd777", "play", "pocketcdg", "prboom", "retro8", "same_cdi", "sameduck", "scummvm", "superbroswar", 
+            "swanstation", "tic80", "tyrquake", "uzem", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero", "yabasanshiro", "yabause" };
+        // Rewind is supported but too costly for AUTO mode (large state serialized every frame, rewind_granularity = 1)
+        static readonly List<string> systemNoAutoRewind = new List<string>() { "doom3", "dice", "nds", "3ds", "sega32x", "wii", "gamecube", "triforce", "gc", "psx", "zxspectrum", "odyssey2", 
+            "n64", "dreamcast", "atomiswave", "naomi", "naomi2", "neogeocd", "saturn", "supermodel", "mame", "hbmame", "fbneo", "dos", "scummvm", "psp" };
+
+        // Same as above, core-based: flycast stops/restarts its emulation thread on each retro_serialize() call
+        static readonly List<string> coreNoAutoRewind = new List<string>() { "flycast", "zc255" };
+
+        // Cores whose state leaves little or no room in RetroArch's default 20 MB rewind buffer
+        // Value: minimum rewind_granularity forced when rewind is on (1 = keep the user's value)
+        static readonly Dictionary<string, int> coreLargeRewindState = new Dictionary<string, int>()
+        {
+            { "flycast", 4 },                   // Dreamcast state is 26 MB+ (RAM 16 + VRAM 8 + ARAM 2), Naomi/Naomi 2 larger
+            { "mupen64plus_next", 1 },          // ~16.8 MB state, only ~3 MB of history left in 20 MB
+            { "mupen64plus_next_gles3", 1 },
+            { "parallel_n64", 1 },
+            { "zc255", 4 }                      // ~34 MB state, capturing every frame is too slow
+        };
 
         // Level < DETERMINISTIC - no run-ahead, no preemptive frames, no netplay (core_info.c:3098-3107)
-        static List<string> coreNoRunahead = new List<string>() { "81", "arduous", "azahar", "b2", "bennugd", "bluemsx", "boom3", "boom3_xp", "bsnes", "bsnes-jg", "bsnes_hd_beta", "cannonball", "cap32", "citra", "crocods", "desmume", "desmume2015", "dice", "dinothawr", "dolphin", "dosbox_pure", "doukutsu_rs", "easyrpg", "ecwolf", "ep128emu_core", "fake08", "fbalpha", "fbalpha2012", "fbalpha2012_cps1", "fbalpha2012_cps2", "fbalpha2012_cps3", "fbalpha2012_neogeo", "flycast", "freej2me", "frodo", "gw", "handy", "hatari", "hatarib", "holani", "kronos", "lowresnx", "lutro", "m2000", "mame2000", "mame2003", "mame2003_midway", "mame2003_plus", "mame2010", "mame2014", "mame2016", "mednafen_snes", "melondsds", "mupen64plus_next", "nekop2", "noods", "np2kai", "nxengine", "o2em", "openlara", "opera", "parallel_n64", "pcsx2", "pd777", "pocketcdg", "ppsspp", "prboom", "prosystem", "puae", "race", "reminiscence", "retro8", "same_cdi", "sameduck", "scummvm", "superbroswar", "supermodel", "swanstation", "theodore", "tic80", "tyrquake", "uzem", "vecx", "vice_x128", "vice_x64", "vice_x64sc", "vice_xpet", "vice_xplus4", "vice_xvic", "virtualjaguar", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero", "yabasanshiro" };
-
+        static List<string> coreNoRunahead = new List<string>() { "81", "applewin", "arduous", "azahar", "b2", "bennugd", "blastem", "bluemsx", "boom3", "boom3_xp", "bsnes", "bsnes-jg", 
+            "bsnes2014_accuracy", "bsnes2014_balanced", "bsnes2014_performance", "bsnes_hd_beta", "bsnes_mercury_accuracy", "bsnes_mercury_balanced", "cannonball", "cap32", "cemu", "citra", 
+            "crocods", "desmume", "desmume2015", "dice", "dinothawr", "dolphin", "dosbox_pure", "doukutsu_rs", "duckstation", "easyrpg", "ecwolf", "emux_gb", "emux_nes", "emux_sms", "ep128emu_core", 
+            "fake08", "fbalpha", "fbalpha2012", "fbalpha2012_cps1", "fbalpha2012_cps2", "fbalpha2012_cps3", "fbalpha2012_neogeo", "flycast", "freej2me", "frodo", "gw", "handy", "hatari", "hatarib", 
+            "holani", "kronos", "lowresnx", "lutro", "m2000", "mame2000", "mame2003", "mame2003_midway", "mame2003_plus", "mame2010", "mame2014", "mame2016", "mednafen_snes", "melondsds", 
+            "mupen64plus_next", "mupen64plus_next_gles3", "nekop2", "noods", "np2kai", "nxengine", "o2em", "openlara", "opera", "parallel_n64", "pcsx2", "pd777", "play", "pocketcdg", "ppsspp", 
+            "prboom", "prosystem", "puae", "race", "reminiscence", "retro8", "same_cdi", "sameduck", "scummvm", "superbroswar", "supermodel", "swanstation", "theodore", "tic80", "tyrquake", "uzem", 
+            "vecx", "vice_x128", "vice_x64", "vice_x64sc", "vice_xpet", "vice_xplus4", "vice_xvic", "virtualjaguar", "vitaquake2", "vitaquake2-rogue", "vitaquake2-xatrix", "vitaquake2-zaero", 
+            "yabasanshiro", "yabause", "zc255" };
         // Netplay shares the same requirement as run-ahead (core_info.c:3098-3107)
         static List<string> coreNoNetplay { get { return coreNoRunahead; } }
 
         // Hardware-rendered cores: a duplicated instance cannot get a second GPU context
         static List<string> coreNoSecondInstance = new List<string>() { "mednafen_psx_hw", "melonds", "vircon32" };
         
-        // Cores requesting RETRO_HW_CONTEXT_OPENGL (compat profile):
-        // RetroArch forces the 'gl' driver for these (video_driver.c:3143), so glsl shaders apply.
-        static List<string> coreGLCompat = new List<string>() { "boom3", "boom3_xp", "desmume", "openlara", "parallel_n64", "ppsspp", "vircon32", "yabasanshiro" };
-        
         static readonly List<string> CoreSaveSort = new List<string>() { "dolphin" };
         static readonly List<string> CoreNoZip = new List<string>() { "mednafen_pce", "mednafen_pce_fast", "mednafen_psx_hw", "mednafen_psx", "mednafen_saturn", "swanstation", 
-            "pcsx_rearmed", "pcsx2" };
+            "pcsx_rearmed", "pcsx2", "zc255" };
         static readonly Dictionary<string, string> coreToP1Device = new Dictionary<string, string>() { { "atari800", "513" }, { "cap32", "513" }, { "fuse", "513" } };
         static readonly Dictionary<string, string> coreToP2Device = new Dictionary<string, string>() { { "atari800", "513" }, { "fuse", "513" } };
         static readonly Dictionary<string, string> defaultVideoDriver = new Dictionary<string, string>()
         {
-            { "flycast", "vulkan" },
+            { "cemu", "glcore" },
+            { "dolphin", "glcore" },
+            { "mednafen_psx_hw", "glcore" },
             { "melondsds", "glcore" },
             { "mupen64plus_next", "glcore" },
             { "pcsx2", "glcore" },
+            { "scummvm", "glcore" },
             { "supermodel", "vulkan" }
         };
         private readonly Dictionary<string, string> coreConfigRemap = new Dictionary<string, string>()
@@ -2582,11 +2703,11 @@ namespace EmulatorLauncher.Libretro
 
             new SubSystem("fbneo", "supergrafx", "sgx"),
             new SubSystem("fbneo", "pcengine", "pce"),
-            new SubSystem("fbneo", "pcenginecd", "pce"),
+            new SubSystem("fbneo", "pcenginecd", "pcecd"),
 
-            new SubSystem("fbneo", "turbografx", "tg"),
-            new SubSystem("fbneo", "turbografxcd", "tg"),
-            new SubSystem("fbneo", "turbografx16", "tg"),
+            new SubSystem("fbneo", "turbografx", "tg16"),
+            new SubSystem("fbneo", "turbografxcd", "pcecd"),
+            new SubSystem("fbneo", "turbografx16", "tg16"),
 
             new SubSystem("fbneo", "gamegear", "gg"),
             new SubSystem("fbneo", "mastersystem", "sms"),

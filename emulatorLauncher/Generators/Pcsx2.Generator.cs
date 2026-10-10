@@ -23,7 +23,6 @@ namespace EmulatorLauncher
         private ScreenResolution _resolution;
         private bool _isPcsxqt;
         private bool _fullscreen;
-        private bool _sindenSoft = false;
         private bool _isArcade = false;
 
         public override void Cleanup()
@@ -33,9 +32,6 @@ namespace EmulatorLauncher
                 _saveStatesWatcher.Dispose();
                 _saveStatesWatcher = null;
             }
-
-            if (_sindenSoft)
-                Guns.KillSindenSoftware();
 
             base.Cleanup();
         }
@@ -121,7 +117,12 @@ namespace EmulatorLauncher
             File.WriteAllText(Path.Combine(_path, "portable.ini"), "RunWizard=0");
 
             //Applying bezels
-            if (!SystemConfig.isOptSet("ratio") || SystemConfig["ratio"] == "4:3")
+            // With "Auto 4:3/3:2" (default), PCSX2 switches to 16:9 by itself when a widescreen patch exists:
+            // only show bezels when the output is guaranteed to be 4:3
+            bool widescreenPatchEnabled = !SystemConfig.isOptSet("widescreen_patch") || SystemConfig.getOptBoolean("widescreen_patch");
+            bool autoRatio = !SystemConfig.isOptSet("ratio");
+
+            if (SystemConfig["ratio"] == "4:3" || (autoRatio && (!_isPcsxqt || _isArcade || !widescreenPatchEnabled)))
                 _bezelFileInfo = BezelFiles.GetBezelFiles(system, rom, resolution, emulator);
 
             _resolution = resolution;
@@ -828,15 +829,18 @@ namespace EmulatorLauncher
                 ini.WriteValue("UI", "SetupWizardIncomplete", "false");
 
                 // fullscreen management
-
+                bool startFullscreen;
                 if (SystemConfig.getOptBoolean("forcefullscreen"))
-                    ini.WriteValue("UI", "StartFullscreen", "true");
+                    startFullscreen = true;
                 else if (SystemConfig.getOptBoolean("disable_fullscreen"))
-                    ini.WriteValue("UI", "StartFullscreen", "false");
-                else if (fullscreen)
-                    ini.WriteValue("UI", "StartFullscreen", "true");
+                    startFullscreen = false;
                 else
-                    ini.WriteValue("UI", "StartFullscreen", "false");
+                    startFullscreen = fullscreen;
+
+                ini.WriteValue("UI", "StartFullscreen", startFullscreen ? "true" : "false");
+
+                if (startFullscreen)
+                    ini.Remove("UI", "DisplayWindowGeometry");
 
                 //ini.Remove("UI", "MainWindowGeometry");
                 //ini.Remove("UI", "MainWindowState");
@@ -1166,15 +1170,11 @@ namespace EmulatorLauncher
         public override int RunAndWait(ProcessStartInfo path)
         {
             int ret = 0;
-            int monitorIndex = SystemConfig["MonitorIndex"].ToInteger();
-
-            var screens = Screen.AllScreens;
-            if (monitorIndex < 0 || monitorIndex >= screens.Length)
-                monitorIndex = Array.FindIndex(screens, s => s.Primary);
+            Screen targetScreen = Program.TargetScreen;
 
             if (_bezelFileInfo != null)
             {
-                var bezel = _bezelFileInfo.ShowFakeBezel(_resolution, true, monitorIndex);
+                var bezel = _bezelFileInfo.ShowFakeBezel(_resolution, true, targetScreen);
                 if (bezel != null)
                 {
                     RECT rc = bezel.ViewPort;
@@ -1182,7 +1182,7 @@ namespace EmulatorLauncher
                     //if (rc.bottom - rc.top == (_resolution ?? ScreenResolution.CurrentResolution).Height)
                     //    rc.bottom--;
 
-                    var process = StartProcessAndMoveItsWindowTo(path, rc, monitorIndex);
+                    var process = StartProcessAndMoveItsWindowTo(path, rc, targetScreen);
                     if (process != null)
                     {
                         Job.Current.AddProcess(process);
@@ -1190,8 +1190,7 @@ namespace EmulatorLauncher
                         while (!process.WaitForExit(50))
                             Application.DoEvents();
 
-                        try { ret = process.ExitCode; }
-                        catch { }
+                        ret = ReportExitCode(process, path);
                     }
 
                     bezel?.Dispose();
@@ -1200,16 +1199,15 @@ namespace EmulatorLauncher
                 }
             }
 
-            if (monitorIndex >= 0)
+            if (targetScreen != null)
             {
-                var process = StartProcessAndMoveItsWindowTo(path, Screen.AllScreens[monitorIndex].Bounds, monitorIndex);
+                var process = StartProcessAndMoveItsWindowTo(path, targetScreen.Bounds, targetScreen);
                 if (process != null)
                 {
                     Job.Current.AddProcess(process);
                     process.WaitForExit();
 
-                    try { ret = process.ExitCode; }
-                    catch { }
+                    ret = ReportExitCode(process, path);
                 }
 
                 return ret;
@@ -1218,12 +1216,13 @@ namespace EmulatorLauncher
             return base.RunAndWait(path);
         }
 
-        private Process StartProcessAndMoveItsWindowTo(ProcessStartInfo path, RECT rc, int monitorIndex)
+        private Process StartProcessAndMoveItsWindowTo(ProcessStartInfo path, RECT rc, Screen screen)
         {
-            var process = Process.Start(path);
+            var process = StartEmulator(path);
+            if (process == null)
+                return null;
 
-            var screen = Screen.AllScreens[monitorIndex];
-            if (screen.Primary)
+            if (screen == null || screen.Primary)
                 return process;
 
             int retryCount = 0;

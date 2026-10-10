@@ -16,7 +16,6 @@ namespace EmulatorLauncher
     partial class TeknoParrotGenerator : Generator
     {
         private static bool _demulshooter = false;
-        private static bool _sindenSoft = false;
         private static RawInputDevice _orgKeyboard = null;
         private static Dictionary<RawLightgun, RawInputDevice> _gunsKbAssociation = new Dictionary<RawLightgun, RawInputDevice>();
 
@@ -45,10 +44,10 @@ namespace EmulatorLauncher
                 return false;
 
             var guns = RawLightgun.GetRawLightguns();
-            if (guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
+            // Sinden software is only needed when guns are actually used (native or through DemulShooter)
+            if ((Program.SystemConfig.getOptBoolean("use_guns") || Program.SystemConfig.getOptBoolean("use_demulshooter")) && guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
             {
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
             }
             
             RawLightgun gun1 = null;
@@ -59,10 +58,6 @@ namespace EmulatorLauncher
             RawLightgun orggun2 = null;
             RawLightgun orggun3 = null;
             RawLightgun orggun4 = null;
-            RawInputDevice wiimote1kb = null;
-            RawInputDevice wiimote2kb = null;
-            RawInputDevice wiimote3kb = null;
-            RawInputDevice wiimote4kb = null;
 
             // Gun indexes
             gun1 = orggun1 = SetGun(guns, gunCount, 1);
@@ -114,10 +109,15 @@ namespace EmulatorLauncher
             var keyboards = hidDevices.Where(t => t.Type == RawInputDeviceType.Keyboard).OrderBy(u => u.DevicePath).ToList();
             var filteredKbs = hidDevices
                 .Where(t => t.Type == RawInputDeviceType.Keyboard)
-                .Where(k => !guns.Any(g => g.DevicePath.Contains(GetVIDPID(k.DevicePath))))
+                .Where(k =>
+                {
+                    // Keep keyboards without VID/PID : they cannot belong to a gun
+                    string kbVidPid = GetVIDPID(k.DevicePath);
+                    return string.IsNullOrEmpty(kbVidPid) || !guns.Any(g => g.DevicePath.Contains(kbVidPid));
+                })
                 .OrderBy(u => u.DevicePath)
                 .ToList();
-            
+
             if (filteredKbs.Count > 0)
             {
                 int kbCount = filteredKbs.Count;
@@ -131,49 +131,8 @@ namespace EmulatorLauncher
                 keyboard = keyboards[0];
             }
 
-            // Perform original assignment of keyboards to wiimotes
-            if (orggun1 != null && orggun1.Type == RawLighGunType.MayFlashWiimote)
-            {
-                wiimote1kb = FindAssociatedKeyboard(orggun1.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun1, wiimote1kb);
-            }
-            if (orggun2 != null && orggun2.Type == RawLighGunType.MayFlashWiimote)
-            {
-                wiimote2kb = FindAssociatedKeyboard(orggun2.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun2, wiimote2kb);
-            }
-            if (orggun3 != null && orggun3.Type == RawLighGunType.MayFlashWiimote)
-            {
-                wiimote3kb = FindAssociatedKeyboard(orggun3.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun3, wiimote3kb);
-            }
-            if (orggun4 != null && orggun4.Type == RawLighGunType.MayFlashWiimote)
-            {
-                wiimote4kb = FindAssociatedKeyboard(orggun4.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun4, wiimote4kb);
-            }
-
-            // Perform assignment of keyboards to Wiimote4Guns
-            if (orggun1 != null && orggun1.Type == RawLighGunType.Wiimote4Guns)
-            {
-                wiimote1kb = FindAssociatedKeyboard(orggun1.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun1, wiimote1kb);
-            }
-            if (orggun2 != null && orggun2.Type == RawLighGunType.Wiimote4Guns)
-            {
-                wiimote2kb = FindAssociatedKeyboard(orggun2.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun2, wiimote2kb);
-            }
-            if (orggun3 != null && orggun3.Type == RawLighGunType.Wiimote4Guns)
-            {
-                wiimote3kb = FindAssociatedKeyboard(orggun3.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun3, wiimote3kb);
-            }
-            if (orggun4 != null && orggun4.Type == RawLighGunType.Wiimote4Guns)
-            {
-                wiimote4kb = FindAssociatedKeyboard(orggun4.DevicePath, keyboards, keyboard);
-                _gunsKbAssociation.Add(orggun4, wiimote4kb);
-            }
+            // Perform original assignment of keyboards to wiimotes (Mayflash and Wiimote4Guns)
+            _gunsKbAssociation = RawLightgun.AssociateGunKeyboards(new[] { orggun1, orggun2, orggun3, orggun4 }, keyboards, keyboard);
 
             if (_gunsKbAssociation.Count > 1 && Program.SystemConfig.getOptBoolean("WiimoteKbOrder"))
             {
@@ -201,9 +160,9 @@ namespace EmulatorLauncher
             {
                 int kbCount = keyboards.Count();
                 int kbIndex = Program.SystemConfig["tp_kbindex"].ToInteger();
-                if (kbIndex > kbCount)
+                if (kbIndex >= kbCount)
                     keyboard = keyboards[kbCount - 1];
-                else
+                else if (kbIndex >= 0)
                     keyboard = keyboards[kbIndex];
             }
 
@@ -226,22 +185,10 @@ namespace EmulatorLauncher
                 kbEnumIndex++;
             }
 
-            if (keyboard != null && keyboard.FriendlyName != null)
+            if (keyboard != null)
             {
-                SimpleLogger.Instance.Info("[GUNS] Using keyboard: " + keyboard.FriendlyName);
+                SimpleLogger.Instance.Info("[GUNS] Using keyboard: " + (keyboard.FriendlyName ?? keyboard.DevicePath));
                 _orgKeyboard = keyboard;
-            }
-            
-            // Cleanup
-            foreach (var joyButton in userProfile.JoystickButtons)
-            {
-                joyButton.RawInputButton = null;
-                joyButton.BindName = null;
-                joyButton.BindNameDi = null;
-                joyButton.BindNameRi = null;
-                joyButton.BindNameXi = null;
-                joyButton.DirectInputButton = null;
-                joyButton.XInputButton = null;
             }
 
             // Variables
@@ -259,10 +206,19 @@ namespace EmulatorLauncher
                 YmlFile ymlFile = YmlFile.Load(tpMappingyml);
                 string gunGameName = tpGameName + "_gun";
                 game = ymlFile.Elements.Where(g => g.Name == gunGameName).FirstOrDefault() as YmlContainer;
-                
+
                 if (game == null)
+                {
                     game = ymlFile.Elements.Where(g => g.Name == tpGameName).FirstOrDefault() as YmlContainer;
-                
+
+                    // A container without "_gun" suffix is a pad mapping, unless it holds gun entries (kb_ values or mouse keys)
+                    if (game != null && !game.Elements.OfType<YmlElement>().Any(e => e.Name.StartsWith("mouse") || (e.Value != null && e.Value.StartsWith("kb_"))))
+                    {
+                        SimpleLogger.Instance.Info("[GUNS] Game mapping is a pad mapping, skipping gun configuration.");
+                        game = null;
+                    }
+                }
+
                 if (game != null)
                 {
                     SimpleLogger.Instance.Info("[GUNS] mapping found for the game, retrieving buttons.");
@@ -301,6 +257,18 @@ namespace EmulatorLauncher
                 return false;
             }
 
+            // Cleanup
+            foreach (var joyButton in userProfile.JoystickButtons)
+            {
+                joyButton.RawInputButton = null;
+                joyButton.BindName = null;
+                joyButton.BindNameDi = null;
+                joyButton.BindNameRi = null;
+                joyButton.BindNameXi = null;
+                joyButton.DirectInputButton = null;
+                joyButton.XInputButton = null;
+            }
+
             // Finalize number of players
             if (useOneGun || gunCount == 1)
                 playerNumber = 1;
@@ -332,6 +300,8 @@ namespace EmulatorLauncher
                         }
                 }
             }
+
+            RawInputDevice baseKeyboard = keyboard;
 
             /// Build the xml gun section for each gun
             /// Use the buttonMap dictionnary to get buttons from the yml file
@@ -395,6 +365,9 @@ namespace EmulatorLauncher
                     {
                         foreach (var button in buttonMap)
                         {
+                            // Start from the default keyboard for each button, never reuse a keyboard found for a previous gun/button
+                            keyboard = baseKeyboard;
+
                             JoystickButtons xmlPlace = null;
                             if (button.Value == null || button.Value == "" || button.Key == "Players")
                                 continue;
@@ -496,7 +469,7 @@ namespace EmulatorLauncher
 
                                     // Find keyboard associated to lightgun
                                     if (!useKb && !ts_nogun)
-                                        keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard);
+                                        keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : RawLightgun.FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard, _gunsKbAssociation);
 
                                     string wiiButton = button.Value;
                                     // Use normal keyboard
@@ -601,7 +574,7 @@ namespace EmulatorLauncher
 
                                     // Find keyboard associated to lightgun
                                     if (!useKb && !ts_nogun)
-                                        keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard);
+                                        keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : RawLightgun.FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard, _gunsKbAssociation);
 
                                     if (_orgKeyboard != null && (useKb || ts_nogun))
                                     {
@@ -648,28 +621,8 @@ namespace EmulatorLauncher
                                         ts_nogun = true;
 
                                     // Find keyboard associated to lightgun
-                                    int startIndex = iGun.DevicePath.IndexOf("VID");
-                                    if (startIndex >= 0 && !useKb && !ts_nogun)
-                                    {
-                                        int endIndex = iGun.DevicePath.IndexOf('#', startIndex);
-                                        if (endIndex == -1) continue;
-                                        if (iGun.DevicePath.Contains("MI_"))
-                                        {
-                                            endIndex = iGun.DevicePath.IndexOf("MI_", startIndex);
-                                            if (endIndex == -1) continue;
-                                            endIndex += 5;
-                                        }
-                                        string searchPath = iGun.DevicePath.Substring(startIndex, endIndex - startIndex);
-
-                                        if (keyboards.Any(k => k.DevicePath.Contains(searchPath)))
-                                            keyboard = keyboards.FirstOrDefault(k => k.DevicePath.Contains(searchPath));
-                                        else
-                                        {
-                                            searchPath = iGun.DevicePath.Substring(startIndex, endIndex - startIndex - 5);
-                                            if (keyboards.Any(k => k.DevicePath.Contains(searchPath)))
-                                                keyboard = keyboards.FirstOrDefault(k => k.DevicePath.Contains(searchPath));
-                                        }
-                                    }
+                                    if (!useKb && !ts_nogun)
+                                        keyboard = RawLightgun.FindKeyboardByVidPid(iGun.DevicePath, keyboards, keyboard);
 
                                     if (_orgKeyboard != null && (useKb || ts_nogun))
                                     {
@@ -737,9 +690,9 @@ namespace EmulatorLauncher
                                 {
                                     bool gunInvert = Program.SystemConfig.getOptBoolean("gun_invert");
                                     string mouseButton = button.Key.ToLowerInvariant();
-                                   
+
                                     // Find keyboard associated to lightgun
-                                    keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard);
+                                    keyboard = _gunsKbAssociation.ContainsKey(iGun) ? _gunsKbAssociation[iGun] : RawLightgun.FindAssociatedKeyboard(iGun.DevicePath, keyboards, keyboard, _gunsKbAssociation);
 
                                     // Get Keyboard ID
                                     int kbfirstIndex = keyboard.DevicePath.IndexOf('#');
@@ -849,7 +802,10 @@ namespace EmulatorLauncher
                 {
                     xmlLightgun = userProfile.JoystickButtons.FirstOrDefault(j => j.InputMapping == inputEnumLG && !j.HideWithRawInput);
 
-                    if (iGun.Type == RawLighGunType.Mouse && wiimoteGun)
+                    if (xmlLightgun == null)
+                        SimpleLogger.Instance.Warning("[GUNS] No " + searchLG + " slot in game profile.");
+
+                    else if (iGun.Type == RawLighGunType.Mouse && wiimoteGun)
                     {
                         xmlLightgun.RawInputButton = new RawInputButton
                         {
@@ -983,152 +939,7 @@ namespace EmulatorLauncher
 
         private static string GetVIDPID(string path)
         {
-            bool acpi = false;
-            int vidIndex = path.IndexOf("VID");
-            if (vidIndex < 0)
-            {
-                vidIndex = path.IndexOf("ACPI") + 5;
-                if (vidIndex < 0)
-                    return "";
-                else
-                    acpi = true;
-            }
-
-            if (vidIndex < 0)
-                return "";
-            
-            int pidIndex = path.IndexOf("PID");
-            if (pidIndex < 0 & acpi)
-                pidIndex = path.IndexOf("#", vidIndex + 5);
-            if (pidIndex < 0)
-                return "";
-
-            int endindex = acpi ? path.IndexOf("#", pidIndex) : path.IndexOf("&", pidIndex);
-            if (endindex < 0)
-                return path.Substring(vidIndex, path.Length - vidIndex);
-            else
-                return path.Substring(vidIndex, endindex - vidIndex);
-        }
-
-        private static string GetWiimoteVIDPID(string devicePath)
-        {
-            try
-            {
-                string[] parts = devicePath.Split('#');
-                if (parts.Length < 3)
-                    return null;
-
-                string[] vidPidParts = parts[1].Split('&');
-                string vidPid = $"{vidPidParts[0]}&{vidPidParts[1]}"; // Only take VID and PID
-
-                string partAfterSecondHash = parts[2];
-                char characterAfterSecondHash = partAfterSecondHash[0];
-
-                return vidPid;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static string GetWiimoteAssociationChar(string devicePath)
-        {
-            try
-            {
-                string[] parts = devicePath.Split('#');
-                if (parts.Length < 3)
-                    return "";
-
-                string partAfterSecondHash = parts[2];
-                char characterAfterSecondHash = partAfterSecondHash[0]; // First character
-
-                return characterAfterSecondHash.ToString();
-            }
-            catch
-            {
-                return "";
-            }
-        }
-
-        private static RawInputDevice FindAssociatedKeyboard(string gunPath, List<RawInputDevice> keyboards, RawInputDevice keyboard)
-        {
-            // Handle Wiimote4Guns differently
-            if (gunPath.ToLowerInvariant().Contains("vmulti"))
-            {
-                string gunIdentifier = "";
-                if (gunPath.ToLowerInvariant().Contains("vmultia"))
-                    gunIdentifier = "vmultia";
-                else if (gunPath.ToLowerInvariant().Contains("vmultib"))
-                    gunIdentifier = "vmultib";
-                else if (gunPath.ToLowerInvariant().Contains("vmultic"))
-                    gunIdentifier = "vmultic";
-                else if (gunPath.ToLowerInvariant().Contains("vmultid"))
-                    gunIdentifier = "vmultid";
-
-                List<RawInputDevice> kbToIgnore = new List<RawInputDevice>();
-                if (_gunsKbAssociation.Count > 0)
-                {
-                    foreach (var pair in _gunsKbAssociation)
-                    {
-                        kbToIgnore.Add(pair.Value);
-                    }
-                }
-
-                foreach (var kb in keyboards)
-                {
-                    if (kbToIgnore.Contains(kb))
-                        continue;
-
-                    if (kb.DevicePath.ToLowerInvariant().Contains(gunIdentifier))
-                    {
-                        return kb;
-                    }
-                }
-            }
-            else
-            {
-                // Original logic for MayFlashWiimote and other guns
-                string mouseVIDPID = GetWiimoteVIDPID(gunPath);
-                string mouseChar = GetWiimoteAssociationChar(gunPath);
-                string toSearch = mouseVIDPID + "_" + mouseChar;
-                List<RawInputDevice> kbToIgnore = new List<RawInputDevice>();
-
-                if (_gunsKbAssociation.Any(g => g.Key.DevicePath == gunPath))
-                {
-                    var keyPair = _gunsKbAssociation.FirstOrDefault(g => g.Key.DevicePath == gunPath);
-                    keyboard = keyPair.Value;
-                    return keyboard;
-                }
-                else if (_gunsKbAssociation.Count > 0)
-                {
-                    foreach (var pair in _gunsKbAssociation)
-                    {
-                        kbToIgnore.Add(pair.Value);
-                    }
-                }
-
-                foreach (var kb in keyboards)
-                {
-                    if (kbToIgnore.Contains(kb))
-                    {
-                        continue;
-                    }
-                    
-                    string kbVIDPID = GetWiimoteVIDPID(kb.DevicePath);
-                    string kbChar = GetWiimoteAssociationChar(kb.DevicePath);
-
-                    if (kbVIDPID != null && kbChar != null)
-                    {
-                        string toFind = kbVIDPID + "_" + kbChar;
-                        if (toSearch.ToLowerInvariant() == toFind.ToLowerInvariant())
-                        {
-                            return kb;
-                        }
-                    }
-                }
-            }
-            return keyboard;
+            return RawLightgun.GetVIDPID(path);
         }
     }
 }

@@ -1,4 +1,5 @@
 ﻿using EmulatorLauncher.Common;
+using EmulatorLauncher.Common.Compression;
 using EmulatorLauncher.Common.EmulationStation;
 using EmulatorLauncher.Common.FileFormats;
 using Newtonsoft.Json;
@@ -17,8 +18,6 @@ namespace EmulatorLauncher
 {
     partial class PortsLauncherGenerator : Generator
     {
-        private bool _finishProcess = false;
-
         private void ConfigurePort(List<string> commandArray, string rom, string exe)
         {
             // Add one method per port to configure, you can pass commandArray if the port requires special command line arguments
@@ -32,14 +31,14 @@ namespace EmulatorLauncher
             Configurecorsixth(commandArray, rom);
             Configuredhewm3(commandArray, rom);
             Configuredusklight(commandArray, rom);
-            ConfigureGhostship(rom, exe);
+            ConfigureGhostship(commandArray, rom, exe);
             ConfigureOpenGoal(commandArray, rom);
             ConfigureOpenJazz(commandArray, rom);
             ConfigurePDark(commandArray, rom);
             ConfigurePowerBomberman(rom, exe);
             ConfigureRTCW(commandArray, rom);
-            ConfigureShip2(rom, exe);
-            ConfigureSOH(rom, exe);
+            ConfigureShip2(commandArray, rom, exe);
+            ConfigureSOH(commandArray, rom, exe);
             ConfigureSonic3air(rom, exe);
             ConfigureSonicMania(rom, exe);
             ConfigureSonicRetro(rom, exe);
@@ -297,10 +296,24 @@ namespace EmulatorLauncher
             if (_emulator != "corsixth")
                 return;
 
+            // Theme Hospital data: the game is normally a ".game" folder, if a file is used its folder is taken
+            string thInstall = Directory.Exists(rom) ? rom : Path.GetDirectoryName(rom);
+
+            // Portable mode: without config.path.txt, CorsixTH creates %APPDATA%\CorsixTH at startup even with --config-file
+            // "." = working directory (emulator folder), avoids path encoding issues in Lua
+            string configPathFile = Path.Combine(_path, "config.path.txt");
+            try
+            {
+                if (!File.Exists(configPathFile) || File.ReadAllText(configPathFile).Trim() != ".")
+                    File.WriteAllText(configPathFile, ".");
+            }
+            catch { SimpleLogger.Instance.Warning("[WARNING] Unable to write CorsixTH config.path.txt."); }
+
             string cfgFile = Path.Combine(_path, "config.txt");
             if (!File.Exists(cfgFile))
             {
-                try { 
+                try
+                {
                     File.WriteAllText(cfgFile, corsixth_config);
                     System.Threading.Thread.Sleep(100);
                 }
@@ -309,7 +322,8 @@ namespace EmulatorLauncher
             string hotkeyFile = Path.Combine(_path, "hotkeys.txt");
             if (!File.Exists(hotkeyFile))
             {
-                try { 
+                try
+                {
                     File.WriteAllText(hotkeyFile, corsixth_hotkeys);
                     System.Threading.Thread.Sleep(100);
                 }
@@ -321,8 +335,8 @@ namespace EmulatorLauncher
                 try
                 {
                     // Paths
-                    ini.WriteValue("", "theme_hospital_install", "[[" + rom + "]]");
-                    
+                    ini.WriteValue("", "theme_hospital_install", "[[" + thInstall + "]]");
+
                     string savesPath = Path.Combine(AppConfig.GetFullPath("saves"), "corsixth");
                     if (!Directory.Exists(savesPath))
                     {
@@ -342,43 +356,38 @@ namespace EmulatorLauncher
                     //Video
                     ini.WriteValue("", "fullscreen", _fullscreen ? "true" : "false");
 
-                    /// Game resolution
-                    string gameWidth = Screen.PrimaryScreen.Bounds.Width.ToString();
-                    string gameHeight = Screen.PrimaryScreen.Bounds.Height.ToString();
+                    // Internal resolution = logical size, letterboxed by CorsixTH in desktop fullscreen
+                    // CorsixTH always opens on the primary display
+                    int width = _resolution != null ? _resolution.Width : Screen.PrimaryScreen.Bounds.Width;
+                    int height = _resolution != null ? _resolution.Height : Screen.PrimaryScreen.Bounds.Height;
 
-                    if (_resolution != null)
-                    {
-                        gameWidth = _resolution.Width.ToString();
-                        gameHeight = _resolution.Height.ToString();
-                    }
-
-                    else if (SystemConfig.isOptSet("th_resolution") && !string.IsNullOrEmpty(SystemConfig["th_resolution"]))
+                    // The game option has priority over the desktop video mode
+                    if (SystemConfig.isOptSet("th_resolution") && !string.IsNullOrEmpty(SystemConfig["th_resolution"]))
                     {
                         string[] gameRes = SystemConfig["th_resolution"].Split('x');
-                        gameWidth = gameRes[0];
-                        gameHeight = gameRes[1];
+                        if (gameRes.Length == 2 && gameRes[0].ToInteger() > 0 && gameRes[1].ToInteger() > 0)
+                        {
+                            width = gameRes[0].ToInteger();
+                            height = gameRes[1].ToInteger();
+                        }
                     }
 
-                    int width = gameWidth.ToInteger();
-                    int height = gameHeight.ToInteger();
+                    if (height > 0 && (float)width / height > 1.4f)
+                        _nobezels = true;
 
-                    if (height > 0)
-                    {
-                        float ratio = (float)width / height;
+                    ini.WriteValue("", "width", width.ToString());
+                    ini.WriteValue("", "height", height.ToString());
 
-                        if (ratio > 1.4f)
-                            _nobezels = true;
-                    }
-
-                    ini.WriteValue("", "width", gameWidth);
-                    ini.WriteValue("", "height", gameHeight);
+                    // UI scale is capped by CorsixTH to the largest scale fitting the resolution
+                    // Removed when not set, so that the engine default applies
+                    if (SystemConfig.isOptSet("th_ui_scale") && !string.IsNullOrEmpty(SystemConfig["th_ui_scale"]))
+                        ini.WriteValue("", "ui_scale", SystemConfig["th_ui_scale"]);
+                    else
+                        ini.Remove("", "ui_scale");
 
                     ini.WriteValue("", "check_for_updates", "false");
                     BindBoolIniFeatureOn(ini, "", "capture_mouse", "th_capture_mouse", "true", "false");
-                    if (SystemConfig.isOptSet("th_language") && !string.IsNullOrEmpty(SystemConfig["th_language"]))
-                        ini.WriteValue("", "language", "[[" + SystemConfig["th_language"] + "]]");
-                    else
-                        ini.WriteValue("", "language", "[[English]]");
+                    ini.WriteValue("", "language", "[[" + GetCorsixTHLanguage() + "]]");
 
                     ini.Save();
                 }
@@ -403,6 +412,51 @@ namespace EmulatorLauncher
             }
             commandArray.Add("--config-file=" + "\"" + cfgFile + "\"");
             commandArray.Add("--hotkeys-file=" + "\"" + hotkeyFile + "\"");
+        }
+
+        // CorsixTH language names (Lua/languages/*.lua), by EmulationStation language code
+        private static readonly Dictionary<string, string> corsixthLanguages = new Dictionary<string, string>
+        {
+            { "cs", "Czech" },
+            { "da", "Danish" },
+            { "de", "German" },
+            { "el", "Greek" },
+            { "en", "English" },
+            { "es", "Spanish" },
+            { "fi", "Finnish" },
+            { "fr", "French" },
+            { "hu", "Hungarian" },
+            { "it", "Italian" },
+            { "ja", "Japanese" },
+            { "ko", "Korean" },
+            { "nb", "Norwegian" },
+            { "nl", "Dutch" },
+            { "no", "Norwegian" },
+            { "pl", "Polish" },
+            { "pt", "Portuguese" },
+            { "ru", "Russian" },
+            { "sv", "Swedish" },
+            { "uk", "Ukrainian" },
+            { "zh", "Chinese (simplified)" }
+        };
+
+        private string GetCorsixTHLanguage()
+        {
+            if (SystemConfig.isOptSet("th_language") && !string.IsNullOrEmpty(SystemConfig["th_language"]))
+                return SystemConfig["th_language"];
+
+            // Default: EmulationStation language, regional variants first
+            string esLanguage = SystemConfig["Language"] ?? string.Empty;
+            if (esLanguage.Equals("pt_BR", StringComparison.OrdinalIgnoreCase))
+                return "Brazilian Portuguese";
+            if (esLanguage.Equals("zh_TW", StringComparison.OrdinalIgnoreCase))
+                return "Chinese (traditional)";
+
+            string lang;
+            if (corsixthLanguages.TryGetValue(GetCurrentLanguage(), out lang))
+                return lang;
+
+            return "English";
         }
 
         private void Configuredhewm3(List<string> commandArray, string rom)
@@ -548,16 +602,10 @@ namespace EmulatorLauncher
                 commandArray.Add("\"" + rom + "\"");
             }
 
-            // Ensure portable mode
+            // Ensure portable mode: Dusklight 2.x ignores the descriptor without "version": 1 (also accepted by 1.x)
             string dataJson = Path.Combine(_path, "data_location.json");
-            if (!File.Exists(dataJson))
-            {
-                try
-                {
-                    File.WriteAllText(dataJson, "{\r\n    \"mode\": \"portable\"\r\n}");
-                }
-                catch { }
-            }
+            try { File.WriteAllText(dataJson, "{\r\n    \"version\": 1,\r\n    \"mode\": \"portable\"\r\n}"); }
+            catch { SimpleLogger.Instance.Warning("[WARNING] Unable to write Dusklight data_location.json."); }
 
             var datalocation = DynamicJson.Load(dataJson);
             datalocation["mode"] = "portable";
@@ -574,7 +622,7 @@ namespace EmulatorLauncher
 
             var config = DynamicJson.Load(configJson);
             config["backend.checkForUpdates"] = "false";
-            config["backend.isoPath"] = "\"" + rom + "\"";
+            config["backend.isoPath"] = rom;
             config["backend.wasPresetChosen"] = "true";
             config["video.enableFullscreen"] = _fullscreen ? "true" : "false";
 
@@ -588,110 +636,157 @@ namespace EmulatorLauncher
             BindBoolFeature(config, "game.enableFpsOverlay", "dusklight_fps", "true", "false");
             BindBoolFeature(config, "game.enableDiscordPresence", "discord", "true", "false");
             BindFeature(config, "game.bloomMode", "dusklight_bloom", "2");
+            BindFeature(config, "game.enableFrameInterpolation", "dusklight_interpolation", "0");
+            BindFeature(config, "game.depthOfFieldMode", "dusklight_dof", "2");
+            BindFeature(config, "game.disableLetterboxing", "dusklight_letterbox", "0");
+            BindBoolFeature(config, "game.disableCutscenePillarboxing", "dusklight_pillarbox", "true", "false");
+            BindBoolFeature(config, "game.enableMirrorMode", "dusklight_mirror", "true", "false");
+            BindBoolFeature(config, "game.freeCamera", "dusklight_freecam", "true", "false");
+            BindBoolFeature(config, "game.enableGyroAim", "dusklight_gyroaim", "true", "false");
+            BindBoolFeature(config, "game.enableControllerToasts", "dusklight_ctrltoasts", "true", "false");
+            BindBoolFeature(config, "backend.showPipelineCompilation", "dusklight_showshadercompile", "true", "false");
+
+            // Quality of life settings from Dusklight's own presets, only written when the option is set
+            // so that settings changed in the Dusklight menu are kept otherwise
+            if (SystemConfig.isOptSet("dusklight_enhancements") && !string.IsNullOrEmpty(SystemConfig["dusklight_enhancements"]))
+            {
+                bool duskPreset = SystemConfig["dusklight_enhancements"] == "dusk";
+
+                foreach (string key in dusklightEnhancements)
+                    config[key] = duskPreset ? "true" : "false";
+
+                // The original TV settings screen is only shown by the Classic preset
+                config["game.hideTvSettingsScreen"] = duskPreset ? "true" : "false";
+            }
 
             if (config["game.fpsOverlayCorner"] == null)
                 config["game.fpsOverlayCorner"] = "0";
 
             config.Save();
+
+            ConfigureDusklightControls(dataPath);
         }
 
-        private void ConfigureGhostship(string rom, string exe)
+        // Quality of life settings enabled by Dusklight's "Dusklight" preset (ui/preset.cpp), disabled by its "Classic" preset
+        private static readonly string[] dusklightEnhancements = new string[]
+        {
+            "game.enableQuickTransform",
+            "game.biggerWallets",
+            "game.noReturnRupees",
+            "game.disableRupeeCutscenes",
+            "game.noSwordRecoil",
+            "game.fastClimbing",
+            "game.noMissClimbing",
+            "game.fastTears",
+            "game.no2ndFishForCat",
+            "game.buttonFishing",
+            "game.instantSaves",
+            "game.midnasLamentNonStop",
+            "game.sunsSong",
+            "game.autoSave",
+            "game.enhancedMapMenus"
+        };
+
+        // Extracts one entry of a Ship o2r archive (zip) and returns its bytes. Returns null if unavailable.
+        private static byte[] ReadShipArchiveEntry(string archivePath, string entryName)
+        {
+            if (!File.Exists(archivePath))
+                return null;
+
+            string tmpPath = Path.Combine(Path.GetTempPath(), "rb_o2r_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                using (var archive = Zip.Open(archivePath))
+                {
+                    if (archive == null)
+                        return null;
+
+                    archive.Extract(tmpPath, entryName);
+                }
+
+                string entryFile = Path.Combine(tmpPath, entryName);
+                return File.Exists(entryFile) ? File.ReadAllBytes(entryFile) : null;
+            }
+            catch { return null; }
+            finally
+            {
+                try { if (Directory.Exists(tmpPath)) Directory.Delete(tmpPath, true); } catch { }
+            }
+        }
+
+        // Ghostship "portVersion" = 3 x uint16 big-endian (major, minor, patch), no endianness byte. Returns null if unknown.
+        private static int[] GetGhostshipArchiveVersion(string archivePath)
+        {
+            byte[] data = ReadShipArchiveEntry(archivePath, "portVersion");
+            if (data == null || data.Length < 4)
+                return null;
+
+            return new int[] { (data[0] << 8) | data[1], (data[2] << 8) | data[3] };
+        }
+
+        private void ConfigureGhostship(List<string> commandArray, string rom, string exe)
         {
             if (_emulator != "ghostship")
                 return;
 
-            var otrFiles = Directory.GetFiles(_path, "*.o2r");
-            var gameOtrFiles = otrFiles.Where(file => !file.EndsWith("ghostship.o2r", StringComparison.OrdinalIgnoreCase));
+            // Game archive is sm64.o2r, generated in the emulator folder (portable mode)
+            string gameArchive = Path.Combine(_path, "sm64.o2r");
 
-            if (!gameOtrFiles.Any())
+            // Ghostship rejects an archive whose major.minor differs from the exe version: delete it so it is regenerated silently
+            if (File.Exists(gameArchive))
             {
-                string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
-                try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to Ghostship folder."); }
+                try
+                {
+                    int[] archiveVersion = GetGhostshipArchiveVersion(gameArchive);
+                    var exeVersion = FileVersionInfo.GetVersionInfo(exe);
+
+                    // 0.0.x archives (dev builds) are accepted by Ghostship, keep the same rule
+                    bool devArchive = archiveVersion != null && archiveVersion[0] == 0 && archiveVersion[1] == 0;
+
+                    if (archiveVersion != null && !devArchive && exeVersion.FileMajorPart > 0 &&
+                        (archiveVersion[0] != exeVersion.FileMajorPart || archiveVersion[1] != exeVersion.FileMinorPart))
+                    {
+                        SimpleLogger.Instance.Info("[INFO] Ghostship: sm64.o2r generated by version " + archiveVersion[0] + "." + archiveVersion[1] + ", regenerating for version " + exeVersion.FileMajorPart + "." + exeVersion.FileMinorPart);
+                        File.Delete(gameArchive);
+                    }
+                }
+                catch { }
+            }
+
+            if (!File.Exists(gameArchive))
+            {
+                // Ghostship extracts the ROM without any prompt when its path is passed as argument (only .z64 is supported)
+                if (Path.GetExtension(rom).Equals(".z64", StringComparison.OrdinalIgnoreCase))
+                    commandArray.Add("\"" + rom + "\"");
+                else
+                {
+                    // Fallback: copy the ROM next to the exe so Ghostship's own ROM search can find it
+                    string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
+                    if (!File.Exists(emulatorRom))
+                        try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to Ghostship folder."); }
+                }
             }
 
             // Settings
-            JObject jsonObj;
-            JObject cvars;
-            JObject advancedRes;
-            JObject intScale;
-            JObject controllers;
-            JObject settings;
-            JObject window;
-            JObject backend;
-            JObject fs;
-
             string settingsFile = Path.Combine(_path, "ghostship.cfg.json");
+
+            JObject jsonObj = null;
             if (File.Exists(settingsFile))
             {
-                string jsonString = File.ReadAllText(settingsFile);
-                try { jsonObj = JObject.Parse(jsonString); } catch { jsonObj = new JObject(); }
+                try { jsonObj = JObject.Parse(File.ReadAllText(settingsFile)); } catch { }
             }
-            else
+            if (jsonObj == null)
                 jsonObj = new JObject();
 
-            if (jsonObj["CVars"] == null)
-            {
-                cvars = new JObject();
-                jsonObj["CVars"] = cvars;
-            }
-            else
-                cvars = (JObject)jsonObj["CVars"];
-
-            if (cvars["gAdvancedResolution"] == null)
-            {
-                advancedRes = new JObject();
-                cvars["gAdvancedResolution"] = advancedRes;
-            }
-            else
-                advancedRes = (JObject)cvars["gAdvancedResolution"];
-
-            if (advancedRes["IntegerScale"] == null)
-            {
-                intScale = new JObject();
-                advancedRes["IntegerScale"] = intScale;
-            }
-            else
-                intScale = (JObject)advancedRes["IntegerScale"];
-
-            if (cvars["gControllers"] == null)
-            {
-                controllers = new JObject();
-                cvars["gControllers"] = controllers;
-            }
-            else
-                controllers = (JObject)cvars["gControllers"];
-
-            if (cvars["gSettings"] == null)
-            {
-                settings = new JObject();
-                cvars["gSettings"] = settings;
-            }
-            else
-                settings = (JObject)cvars["gSettings"];
-
-            if (jsonObj["Window"] == null)
-            {
-                window = new JObject();
-                jsonObj["Window"] = window;
-            }
-            else
-                window = (JObject)jsonObj["Window"];
-
-            if (window["Backend"] == null)
-            {
-                backend = new JObject();
-                window["Backend"] = backend;
-            }
-            else
-                backend = (JObject)window["Backend"];
-
-            if (window["Fullscreen"] == null)
-            {
-                fs = new JObject();
-                window["Fullscreen"] = fs;
-            }
-            else
-                fs = (JObject)window["Fullscreen"];
+            // LUS saves empty objects as null, so containers must be type-checked, not only null-checked
+            JObject cvars = GetOrCreateJObject(jsonObj, "CVars");
+            JObject advancedRes = GetOrCreateJObject(cvars, "gAdvancedResolution");
+            JObject intScale = GetOrCreateJObject(advancedRes, "IntegerScale");
+            JObject controllers = GetOrCreateJObject(cvars, "gControllers");
+            JObject settings = GetOrCreateJObject(cvars, "gSettings");
+            JObject window = GetOrCreateJObject(jsonObj, "Window");
+            JObject backend = GetOrCreateJObject(window, "Backend");
+            JObject fs = GetOrCreateJObject(window, "Fullscreen");
 
             // Ensure config windows are not opened
             settings.Remove("Menu");
@@ -764,7 +859,7 @@ namespace EmulatorLauncher
 
             if (SystemConfig.isOptSet("ghostship_fps") && !string.IsNullOrEmpty(SystemConfig["ghostship_fps"]))
             {
-                int ghostshipFPS = SystemConfig["ghostship_fps"].ToInteger();
+                int ghostshipFPS = SystemConfig["ghostship_fps"].ToIntegerString().ToInteger();
                 settings["InterpolationFPS"] = ghostshipFPS;
                 settings["MatchRefreshRate"] = 0;
             }
@@ -781,24 +876,21 @@ namespace EmulatorLauncher
             BindBoolFeatureOnInt(cvars, "gVsyncEnabled", "ghostship_vsync", "1", "0");
             BindFeature(window, "AudioBackend", "ghostship_audioapi", "wasapi");
 
-            if (SystemConfig.isOptSet("ghostship_renderer") && !string.IsNullOrEmpty(SystemConfig["ghostship_renderer"]))
+            // LUS window backend IDs (Ghostship 3.x): 1 = DirectX 11, 2 = OpenGL, 4 = Vulkan (0 is no longer valid)
+            string ghostshipRenderer = SystemConfig["ghostship_renderer"] ?? "";
+            if (ghostshipRenderer.IndexOf("directx", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                string ghostshipRenderer = SystemConfig["ghostship_renderer"];
-                switch (ghostshipRenderer)
-                {
-                    case "OpenGL":
-                        backend["Id"] = 1;
-                        backend["Name"] = "OpenGL";
-                        break;
-                    case "DirectX":
-                        backend["Id"] = 0;
-                        backend["Name"] = "DirectX";
-                        break;
-                }
+                backend["Id"] = 1;
+                backend["Name"] = "DirectX 11";
+            }
+            else if (ghostshipRenderer.IndexOf("vulkan", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                backend["Id"] = 4;
+                backend["Name"] = "Vulkan";
             }
             else
             {
-                backend["Id"] = 1;
+                backend["Id"] = 2;
                 backend["Name"] = "OpenGL";
             }
 
@@ -807,17 +899,52 @@ namespace EmulatorLauncher
             File.WriteAllText(settingsFile, jsonObj.ToString(Formatting.Indented));
         }
 
+        // PC_KERNEL_VERSION, as written by the game in pc-settings.gc
+        private static readonly Dictionary<string, string> _openGoalSettingsHeader = new Dictionary<string, string>
+        {
+            { "jak1", "#x1000a00040000" },  // 1.10.4.0
+            { "jak2", "#x200000000" },      // 0.2.0.0
+            { "jak3", "#x300000000" }       // 0.3.0.0
+        };
+
+        // Language values are game specific
+        private static readonly Dictionary<string, Dictionary<string, int>> _openGoalTextLanguages = new Dictionary<string, Dictionary<string, int>>
+        {
+            { "jak1", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=5,en_uk=6,pt=7,fi=8,sv=9,da=10,no=11,nl=12,pt_br=13,hu=14,pl=19,lt=20,cs=21,hr=22,gl=23,bs=24") },
+            { "jak2", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=5,ko=6,en_uk=7,pt=8,fi=9,sv=10,da=11,no=12,nl=13,pt_br=14,hu=15,ca=16,is=17,pl=18,lt=19,cs=20,hr=21,gl=22") },
+            { "jak3", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=6,ko=7,ru=8,pt=9,nl=10,en_uk=11,fi=12,sv=13,da=14,no=15,pt_br=16,hu=17,ca=18,is=19,pl=20,lt=21,cs=22,hr=23,gl=24") }
+        };
+
+        private static readonly Dictionary<string, Dictionary<string, int>> _openGoalSubtitleLanguages = new Dictionary<string, Dictionary<string, int>>
+        {
+            { "jak1", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,en_uk=6,fi=8,sv=9,da=10,nl=12,pt_br=13,pl=19,lt=20,cs=21,hr=22,gl=23,bs=24") },
+            { "jak2", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=5,ko=6,en_uk=7,pt=8,fi=9,sv=10,da=11,no=12,nl=13,pt_br=14,hu=15,ca=16,is=17,pl=18,lt=19,cs=20,hr=21,gl=22") },
+            { "jak3", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=6,ko=7,ru=8,pt=9,nl=10,en_uk=11,fi=12,sv=13,da=14,no=15,pt_br=16,hu=17,ca=18,is=19,pl=20,lt=21,cs=22,hr=23,gl=24") }
+        };
+
+        private static readonly Dictionary<string, Dictionary<string, int>> _openGoalAudioLanguages = new Dictionary<string, Dictionary<string, int>>
+        {
+            { "jak1", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=5") },
+            { "jak2", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=5,ko=6") },
+            { "jak3", OpenGoalLanguageTable("en=0,fr=1,de=2,es=3,it=4,ja=6,ko=7,ru=8,pt=9,nl=10,en_uk=11") }
+        };
+
+        private static Dictionary<string, int> OpenGoalLanguageTable(string table)
+        {
+            return table.Split(',')
+                .Select(s => s.Split('='))
+                .ToDictionary(p => p[0], p => int.Parse(p[1], CultureInfo.InvariantCulture));
+        }
         private void ConfigureOpenGoal(List<string> commandArray, string rom)
         {
-            List<string> openGoalGames = new List<string> { "jak1", "jak2", "jak3" };
-            Dictionary<string, string> openGoalDefaultRes = new Dictionary<string, string> 
-            {
-                { "jak1", "aspect4x3 4 3 #f" },
-                { "jak2", "aspect4x3 4 3 #t" },
-                { "jak3", "aspect4x3 4 3 #t" }
-             };
+            if (_emulator != "opengoal")
+                return;
 
-            Dictionary<string, string> jak1ResList = new Dictionary<string, string>
+            List<string> openGoalGames = new List<string> { "jak1", "jak2", "jak3" };
+
+            // "aspect-state" = PS2 game aspect, custom ratio X, custom ratio Y, auto ratio (follows the window)
+            // A fixed ratio (auto = #f) resets "use-vis?", so "use-vis?" must always be written after "aspect-state"
+            Dictionary<string, string> ratioList = new Dictionary<string, string>
             {
                 { "4_3", "aspect4x3 4 3 #f" },
                 { "16_9", "aspect4x3 16 9 #f" },
@@ -826,32 +953,7 @@ namespace EmulatorLauncher
                 { "16_10", "aspect4x3 16 10 #f" },
                 { "21_9", "aspect4x3 21 9 #f" },
                 { "64_27", "aspect4x3 64 27 #f" }
-             };
-
-            Dictionary<string, string> jak2ResList = new Dictionary<string, string>
-            {
-                { "4_3", "aspect4x3 4 3 #f" },
-                { "16_9", "aspect4x3 16 9 #f" },
-                { "4_3_ps2", "aspect4x3 4 3 #t" },
-                { "16_9_ps2", "aspect16x9 4 3 #t" },
-                { "16_10", "aspect4x3 16 10 #f" },
-                { "21_9", "aspect4x3 21 9 #f" },
-                { "64_27", "aspect4x3 64 27 #f" }
-             };
-
-            Dictionary<string, string> jak3ResList = new Dictionary<string, string>
-            {
-                { "4_3", "aspect4x3 4 3 #f" },
-                { "16_9", "aspect4x3 16 9 #f" },
-                { "4_3_ps2", "aspect4x3 4 3 #t" },
-                { "16_9_ps2", "aspect16x9 4 3 #t" },
-                { "16_10", "aspect4x3 16 10 #f" },
-                { "21_9", "aspect4x3 21 9 #f" },
-                { "64_27", "aspect4x3 64 27 #f" }
-             };
-
-            if (_emulator != "opengoal")
-                return;
+            };
 
             string gameName = Path.GetFileNameWithoutExtension(rom);
             string[] romLines = File.ReadAllLines(rom);
@@ -863,71 +965,29 @@ namespace EmulatorLauncher
 
             // Check if game has been extracted already, if not, user can set path to iso in ES
             string outDataPath = Path.Combine(_path, "data", "out", gameName, "iso");
-            {
-                if (!Directory.Exists(outDataPath))
-                {
-                    SimpleLogger.Instance.Warning("[WARNING] OpenGOAL data folder not found, checking if a path to ISO is specified.");
-                    
-                    string isoSearch = "opengoal_isopath_" + gameName;
-
-                    if (SystemConfig.isOptSet(isoSearch) && !string.IsNullOrEmpty(SystemConfig[isoSearch]))
-                    {
-                        string isoPath = SystemConfig[isoSearch];
-                        if (!File.Exists(isoPath))
-                            SimpleLogger.Instance.Error("[ERROR] Failed to extract game from ISO: " + isoPath);
-                        else
-                        {
-                            SimpleLogger.Instance.Error("[INFO] Trying to extract game file with provided path: " + isoPath);
-                            
-                            var openGoalExtractorCommands = new List<string>
-                            {
-                                "-g",
-                                gameName,
-                                "\"" + isoPath + "\""
-                            };
-                            var args = string.Join(" ", openGoalExtractorCommands);
-
-                            var openGoalExtract = new ProcessStartInfo()
-                            {
-                                FileName = Path.Combine(_path, "extractor.exe"),
-                                WorkingDirectory = _path,
-                                Arguments = args,
-                            };
-
-                            try
-                            {
-                                using (var process = new Process())
-                                {
-                                    process.StartInfo = openGoalExtract;
-                                    process.Start();
-                                    process.WaitForExit();
-                                    _finishProcess = true;
-                                    return;
-                                }
-                            }
-                            catch (Exception ex) { SimpleLogger.Instance.Error("[ERROR] Failed to extract game from ISO: " + isoPath + " - " + ex.Message); }
-                        }
-                    }
-                    else
-                        throw new ApplicationException("File needs to be extracted first.");
-                }
-            }
+            if (!Directory.Exists(outDataPath))
+                ExtractOpenGoalGame(gameName, outDataPath);
 
             commandArray.Add("-g");
             commandArray.Add(gameName);
 
             string configFolder = Path.Combine(_path, "config");
-            if (!Directory.Exists(configFolder))
-                try { Directory.CreateDirectory(configFolder); } catch { }
-
             commandArray.Add("--config-path");
             commandArray.Add("\"" + configFolder + "\"");
 
-            // Settings file
             string gameConfigPath = Path.Combine(configFolder, "OpenGOAL", gameName);
-            string debugSettingsFile = Path.Combine(gameConfigPath, "misc", "debug-settings.json");
+            string settingsFolder = Path.Combine(gameConfigPath, "settings");
+            string miscFolder = Path.Combine(gameConfigPath, "misc");
+
+            // Create the folders on first launch, so that settings are applied right away (no need to start the game once)
+            foreach (string folder in new[] { settingsFolder, miscFolder })
+            {
+                if (!Directory.Exists(folder))
+                    try { Directory.CreateDirectory(folder); } catch { }
+            }
 
             // Debug Settings file
+            string debugSettingsFile = Path.Combine(miscFolder, "debug-settings.json");
 
             if (!File.Exists(debugSettingsFile))
             {
@@ -948,7 +1008,7 @@ namespace EmulatorLauncher
             }
 
             // Display settings
-            string displaySettingsFile = Path.Combine(gameConfigPath, "settings", "display-settings.json");
+            string displaySettingsFile = Path.Combine(settingsFolder, "display-settings.json");
 
             if (!File.Exists(displaySettingsFile))
             {
@@ -960,7 +1020,7 @@ namespace EmulatorLauncher
             {
                 var displayConf = DynamicJson.Load(displaySettingsFile);
 
-                BindFeature(displayConf, "display_id", "MonitorIndex", "0");
+                displayConf["display_id"] = Displays.IndexOf(Program.TargetScreen, MonitorOrder.SdlLike).ToString();
                 if (_fullscreen && _exclusivefs)
                     displayConf["display_mode"] = "1";
                 else if (_fullscreen)
@@ -971,8 +1031,18 @@ namespace EmulatorLauncher
                 displayConf.Save();
             }
 
-            // Game settings - to check settings for jak 2
-            string configFilePath = Path.Combine(gameConfigPath, "settings", "pc-settings.gc");
+            // Controllers (input-settings.json)
+            ConfigureOpenGoalControls(settingsFolder);
+
+            // Game settings
+            string configFilePath = Path.Combine(settingsFolder, "pc-settings.gc");
+
+            // First launch: create a minimal file, the game fills in the missing settings with its own defaults
+            if (!File.Exists(configFilePath) && _openGoalSettingsHeader.ContainsKey(gameName))
+            {
+                try { File.WriteAllLines(configFilePath, new[] { "(settings " + _openGoalSettingsHeader[gameName], "  )" }); }
+                catch { SimpleLogger.Instance.Warning("[WARNING] Could not create file: " + configFilePath); }
+            }
 
             if (!File.Exists(configFilePath))
             {
@@ -980,58 +1050,76 @@ namespace EmulatorLauncher
                 return;
             }
 
-            string[] configLines = File.ReadAllLines(configFilePath);
-            
+            List<string> configLines = File.ReadAllLines(configFilePath).ToList();
+
+            // Replace a top-level setting, or add it before the closing parenthesis when the game has not written it yet
+            // Only keys known by the game must be written : the game rejects the whole file on an unknown key
             Action<string, string> bindFeature = (string feature, string value) =>
             {
-                for (int i = 0; i < configLines.Length; i++)
+                string newLine = "  (" + feature + " " + value + ")";
+
+                int index = configLines.FindIndex(l => l.TrimStart().StartsWith("(" + feature + " "));
+                if (index >= 0)
                 {
-                    if (configLines[i].Contains("(" + feature))
-                    {
-                        configLines[i] = "  ("+ feature + " " + value + ")";
-                        break;
-                    }
+                    configLines[index] = newLine;
+                    return;
                 }
+
+                int closeIndex = configLines.FindLastIndex(l => l.Trim() == ")");
+                if (closeIndex >= 0)
+                    configLines.Insert(closeIndex, newLine);
             };
+
+            // Remove a top-level setting : the game then uses its own default (pc-settings "reset" runs before the file is read)
+            Action<string> removeFeature = (string feature) =>
+            {
+                configLines.RemoveAll(l => l.TrimStart().StartsWith("(" + feature + " "));
+            };
+
+            // Language values differ for each game, ES stores a language code
+            Action<string, string, Dictionary<string, Dictionary<string, int>>> bindLanguage = (string feature, string option, Dictionary<string, Dictionary<string, int>> table) =>
+            {
+                string lang = SystemConfig.isOptSet(option) ? SystemConfig[option] : null;
+
+                int value;
+                if (!string.IsNullOrEmpty(lang) && table.ContainsKey(gameName) && table[gameName].TryGetValue(lang, out value))
+                {
+                    bindFeature(feature, value.ToString(CultureInfo.InvariantCulture));
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(lang))
+                    SimpleLogger.Instance.Info("[INFO] OpenGOAL: language '" + lang + "' is not available in " + gameName + " (" + feature + "), using the game default.");
+
+                removeFeature(feature);
+            };
+
 
             if (SystemConfig.isOptSet("opengoal_msaa") && !string.IsNullOrEmpty(SystemConfig["opengoal_msaa"]))
                 bindFeature("msaa", SystemConfig["opengoal_msaa"]);
             else
                 bindFeature("msaa", "2");
 
-            // ratio values are different per game
-            if (SystemConfig.isOptSet("opengoal_ratio") && !string.IsNullOrEmpty(SystemConfig["opengoal_ratio"]))
+            // Default = engine default for the 3 games (pc-settings "reset-gfx"): automatic ratio, no PS2 visibility trees
+            string openGoalRatio = SystemConfig["opengoal_ratio"];
+
+            if (!string.IsNullOrEmpty(openGoalRatio) && ratioList.ContainsKey(openGoalRatio))
             {
-                string opengalRatio = SystemConfig["opengoal_ratio"];
-
-                switch (gameName)
-                {
-                    case "jak1":
-                        bindFeature("aspect-state", jak1ResList.ContainsKey(opengalRatio) ? jak1ResList[opengalRatio] : "");
-                        break;
-                    case "jak2":
-                        bindFeature("aspect-state", jak2ResList.ContainsKey(opengalRatio) ? jak2ResList[opengalRatio] : "");
-                        break;
-                    case "jak3":
-                        bindFeature("aspect-state", jak3ResList.ContainsKey(opengalRatio) ? jak3ResList[opengalRatio] : "");
-                        break;
-                }
-
-                if (opengalRatio.EndsWith("_ps2"))
-                    bindFeature("use-vis?", "#t");
-                else
-                    bindFeature("use-vis?", "#f");
+                bindFeature("aspect-state", ratioList[openGoalRatio]);
+                bindFeature("use-vis?", openGoalRatio.EndsWith("_ps2") ? "#t" : "#f");
             }
             else
-                bindFeature("aspect-state", openGoalDefaultRes.ContainsKey(gameName) ? openGoalDefaultRes[gameName] : "");
+            {
+                bindFeature("aspect-state", "aspect4x3 4 3 #t");
+                bindFeature("use-vis?", "#f");
+            }
 
             if (SystemConfig.isOptSet("opengoal_resolution") && !string.IsNullOrEmpty(SystemConfig["opengoal_resolution"]))
                 bindFeature("game-size", SystemConfig["opengoal_resolution"]);
             else
             {
-                string width = Screen.PrimaryScreen.Bounds.Width.ToString();
-                string height = Screen.PrimaryScreen.Bounds.Height.ToString();
-                string res = _resolution == null ? width + " " + height : _resolution.Width.ToString() + " " + _resolution.Height.ToString();
+                var bounds = Program.TargetScreen.Bounds;
+                string res = _resolution == null ? bounds.Width + " " + bounds.Height : _resolution.Width + " " + _resolution.Height;
                 bindFeature("game-size", res);
             }
 
@@ -1057,16 +1145,59 @@ namespace EmulatorLauncher
             else
                 bindFeature("territory", "-1");
 
-            if (SystemConfig.isOptSet("opengoal_language") && !string.IsNullOrEmpty(SystemConfig["opengoal_language"]))
-                bindFeature("game-language", SystemConfig["opengoal_language"]);
-
-            if (SystemConfig.isOptSet("opengoal_menulang") && !string.IsNullOrEmpty(SystemConfig["opengoal_menulang"]) && gameName != "jak3")
-                bindFeature("text-language", SystemConfig["opengoal_menulang"]);
-
-            if (SystemConfig.isOptSet("opengoal_sublang") && !string.IsNullOrEmpty(SystemConfig["opengoal_sublang"]) && gameName != "jak3")
-                bindFeature("subtitle-language", SystemConfig["opengoal_sublang"]);
+            bindLanguage("game-language", "opengoal_audio_lang", _openGoalAudioLanguages);
+            bindLanguage("text-language", "opengoal_text_lang", _openGoalTextLanguages);
+            bindLanguage("subtitle-language", "opengoal_subtitle_lang", _openGoalSubtitleLanguages);
 
             File.WriteAllLines(configFilePath, configLines);
+        }
+
+        private void ExtractOpenGoalGame(string gameName, string outDataPath)
+        {
+            SimpleLogger.Instance.Warning("[WARNING] OpenGOAL data folder not found, checking if a path to ISO is specified.");
+
+            string isoOption = "opengoal_isopath_" + gameName;
+            string isoPath = SystemConfig.isOptSet(isoOption) ? SystemConfig[isoOption] : null;
+
+            if (string.IsNullOrEmpty(isoPath))
+                throw new ApplicationException("OpenGOAL: " + gameName + " is not extracted yet. Set '" + gameName.ToUpperInvariant() + " ISO PATH' in the advanced settings of the system to extract it automatically.");
+
+            if (!File.Exists(isoPath))
+                throw new ApplicationException("OpenGOAL: ISO file not found: " + isoPath);
+
+            string extractor = Path.Combine(_path, "extractor.exe");
+            if (!File.Exists(extractor))
+                throw new ApplicationException("OpenGOAL: extractor.exe not found in " + _path);
+
+            SimpleLogger.Instance.Info("[INFO] Extracting " + gameName + " from ISO: " + isoPath);
+
+            // Steps are explicit (extract, decompile, compile): without step flags, the extractor also runs "play",
+            // which starts gk.exe without --config-path (settings and saves would be written to %APPDATA%)
+            var extractorInfo = new ProcessStartInfo()
+            {
+                FileName = extractor,
+                WorkingDirectory = _path,
+                Arguments = "-g " + gameName + " -e -d -c \"" + isoPath + "\"",
+            };
+
+            int exitCode;
+            try
+            {
+                using (var process = Process.Start(extractorInfo))
+                {
+                    process.WaitForExit();
+                    exitCode = process.ExitCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new ApplicationException("OpenGOAL: failed to start the extractor - " + ex.Message);
+            }
+
+            if (exitCode != 0 || !Directory.Exists(outDataPath))
+                throw new ApplicationException("OpenGOAL: extraction of " + gameName + " failed (code " + exitCode + "). Check that the ISO is a supported release of the game.");
+
+            SimpleLogger.Instance.Info("[INFO] OpenGOAL: " + gameName + " extracted successfully, starting the game.");
         }
 
         private void ConfigureOpenJazz(List<string> commandArray, string rom)
@@ -1371,143 +1502,91 @@ namespace EmulatorLauncher
             ConfigEditorDhewm3.ChangeConfigValues(cfgFile, changes);
         }
 
-        private void ConfigureShip2(string rom, string exe)
+        // 2Ship "portVersion" = endianness byte (1 = big, 0 = little) followed by uint16 major. Returns -1 if unknown.
+        private static int GetShipArchiveMajorVersion(string archivePath)
+        {
+            byte[] data = ReadShipArchiveEntry(archivePath, "portVersion");
+            if (data == null || data.Length < 3)
+                return -1;
+
+            return data[0] == 1 ? (data[1] << 8) | data[2] : (data[2] << 8) | data[1];
+        }
+
+        private static JObject GetOrCreateJObject(JObject parent, string key)
+        {
+            JObject obj = parent[key] as JObject;
+            if (obj == null)
+            {
+                obj = new JObject();
+                parent[key] = obj;
+            }
+            return obj;
+        }
+
+        private void ConfigureShip2(List<string> commandArray, string rom, string exe)
         {
             if (_emulator != "2ship")
                 return;
 
             _nobezels = true;
 
-            var otrFiles = Directory.GetFiles(_path, "*.otr");
-            var gameOtrFiles = otrFiles.Where(file => !file.EndsWith("2ship.otr", StringComparison.OrdinalIgnoreCase));
+            // Game archive is mm.o2r, generated in the emulator folder (portable mode)
+            string gameArchive = Path.Combine(_path, "mm.o2r");
 
-            if (!gameOtrFiles.Any())
+            // An archive generated by another major version is rejected by 2Ship: delete it so it is regenerated silently
+            if (File.Exists(gameArchive))
             {
-                string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
-                try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to 2ship folder."); }
+                int gameMajor = GetShipArchiveMajorVersion(gameArchive);
+                int portMajor = GetShipArchiveMajorVersion(Path.Combine(_path, "2ship.o2r"));
+
+                if (gameMajor >= 0 && portMajor >= 0 && gameMajor != portMajor)
+                {
+                    SimpleLogger.Instance.Info("[INFO] 2Ship: mm.o2r generated by version " + gameMajor + ".x, regenerating for version " + portMajor + ".x");
+                    try { File.Delete(gameArchive); } catch { }
+                }
+            }
+
+            if (!File.Exists(gameArchive))
+            {
+                // 2Ship extracts the ROM without any prompt when its path is passed as argument (extension check is case-sensitive)
+                string romExt = Path.GetExtension(rom);
+                if (romExt == ".z64" || romExt == ".n64" || romExt == ".v64")
+                    commandArray.Add("\"" + rom + "\"");
+                else
+                {
+                    // Fallback: copy the ROM next to the exe so 2Ship's own ROM search can find it
+                    string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
+                    if (!File.Exists(emulatorRom))
+                        try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to 2ship folder."); }
+                }
             }
 
             // Settings
-            JObject jsonObj;
-            JObject cvars;
-            JObject itemtracker;
-            JObject gdevelopertools;
-            JObject grando;
-            JObject gsettings;
-            JObject advres;
-            JObject intscale;
-            JObject controllers;
-            JObject gwindows;
-            JObject window;
-            JObject wbackend;
-            JObject fs;
             string settingsFile = Path.Combine(_path, "2ship2harkinian.json");
-            
+
             // Initialize JSON structure
+            JObject jsonObj = null;
             if (File.Exists(settingsFile))
             {
-                string jsonString = File.ReadAllText(settingsFile);
-                try { jsonObj = JObject.Parse(jsonString); } catch { jsonObj = new JObject(); }
+                try { jsonObj = JObject.Parse(File.ReadAllText(settingsFile)); } catch { }
             }
-            else
+            if (jsonObj == null)
                 jsonObj = new JObject();
 
-            if (jsonObj["CVars"] == null)
-            {
-                cvars = new JObject();
-                jsonObj["CVars"] = cvars;
-            }
-            else
-                cvars = (JObject)jsonObj["CVars"];
-
-            if (cvars["ItemTracker"] == null)
-            {
-                itemtracker = new JObject();
-                cvars["ItemTracker"] = itemtracker;
-            }
-            else
-                itemtracker = (JObject)cvars["ItemTracker"];
-
-            if (cvars["gDeveloperTools"] == null)
-            {
-                gdevelopertools = new JObject();
-                cvars["gDeveloperTools"] = gdevelopertools;
-            }
-            else
-                gdevelopertools = (JObject)cvars["gDeveloperTools"];
-
-            if (cvars["gRando"] == null)
-            {
-                grando = new JObject();
-                cvars["gRando"] = grando;
-            }
-            else
-                grando = (JObject)cvars["gRando"];
-
-            if (cvars["gSettings"] == null)
-            {
-                gsettings = new JObject();
-                cvars["gSettings"] = gsettings;
-            }
-            else
-                gsettings = (JObject)cvars["gSettings"];
-
-            if (gsettings["AdvancedResolution"] == null)
-            {
-                advres = new JObject();
-                gsettings["AdvancedResolution"] = advres;
-            }
-            else
-                advres = (JObject)gsettings["AdvancedResolution"];
+            // LUS saves empty objects as null, so containers must be type-checked, not only null-checked
+            JObject cvars = GetOrCreateJObject(jsonObj, "CVars");
+            JObject gsettings = GetOrCreateJObject(cvars, "gSettings");
+            JObject advres = GetOrCreateJObject(gsettings, "AdvancedResolution");
 
             advres.Remove("IntegerScale");
-            if (advres["IntegerScale"] == null)
-            {
-                intscale = new JObject();
-                advres["IntegerScale"] = intscale;
-            }
-            else
-                intscale = (JObject)advres["IntegerScale"];
+            JObject intscale = new JObject();
+            advres["IntegerScale"] = intscale;
 
-            if (gsettings["Controllers"] == null)
-            {
-                controllers = new JObject();
-                gsettings["Controllers"] = controllers;
-            }
-            else
-                controllers = (JObject)gsettings["Controllers"];
-
-            if (cvars["gWindows"] == null)
-            {
-                gwindows = new JObject();
-                cvars["gWindows"] = gwindows;
-            }
-            else
-                gwindows = (JObject)cvars["gWindows"];
-
-            if (jsonObj["Window"] == null)
-            {
-                window = new JObject();
-                jsonObj["Window"] = window;
-            }
-            else
-                window = (JObject)jsonObj["Window"];
-
-            if (window["Backend"] == null)
-            {
-                wbackend = new JObject();
-                window["Backend"] = wbackend;
-            }
-            else
-                wbackend = (JObject)window["Backend"];
-
-            if (window["Fullscreen"] == null)
-            {
-                fs = new JObject();
-                window["Fullscreen"] = fs;
-            }
-            else
-                fs = (JObject)window["Fullscreen"];
+            JObject controllers = GetOrCreateJObject(gsettings, "Controllers");
+            JObject gwindows = GetOrCreateJObject(cvars, "gWindows");
+            JObject window = GetOrCreateJObject(jsonObj, "Window");
+            JObject wbackend = GetOrCreateJObject(window, "Backend");
+            JObject fs = GetOrCreateJObject(window, "Fullscreen");
 
             // Settings
             advres["Enabled"] = 1;
@@ -1581,28 +1660,16 @@ namespace EmulatorLauncher
 
             BindFeature(window, "AudioBackend", "ship2_audiobackend", "wasapi");
 
-            if (SystemConfig.isOptSet("ship2_backend") && !string.IsNullOrEmpty(SystemConfig["ship2_backend"]))
+            string ship2Backend = SystemConfig["ship2_backend"] ?? "";
+            if (ship2Backend.IndexOf("opengl", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                string [] backends = SystemConfig["ship2_backend"].Split('_');
-                if (backends.Length > 1)
-                {
-                    int backendID = backends[0].ToInteger();
-                    string backendName = backends[1];
-
-                    wbackend["Id"] = backendID;
-                    wbackend["Name"] = backendName;
-                }
-
-                else
-                {
-                    wbackend["Id"] = 0;
-                    wbackend["Name"] = "DirectX";
-                }
+                wbackend["Id"] = 2;
+                wbackend["Name"] = "OpenGL";
             }
             else
             {
-                wbackend["Id"] = 0;
-                wbackend["Name"] = "DirectX";
+                wbackend["Id"] = 1;
+                wbackend["Name"] = "DirectX 11";
             }
 
             fs["Enabled"] = _fullscreen ? true : false;
@@ -1613,120 +1680,72 @@ namespace EmulatorLauncher
             File.WriteAllText(settingsFile, jsonObj.ToString(Formatting.Indented));
         }
 
-        private void ConfigureSOH(string rom, string exe)
+        private void ConfigureSOH(List<string> commandArray, string rom, string exe)
         {
             if (_emulator != "soh")
                 return;
 
             _nobezels = true;
 
-            var otrFiles = Directory.GetFiles(_path, "*.otr");
-            var gameOtrFiles = otrFiles.Where(file => !file.EndsWith("soh.otr", StringComparison.OrdinalIgnoreCase));
+            // Game archives are oot.o2r / oot-mq.o2r, generated in the emulator folder (portable mode)
+            string vanillaArchive = Path.Combine(_path, "oot.o2r");
+            string mqArchive = Path.Combine(_path, "oot-mq.o2r");
 
-            if (!gameOtrFiles.Any())
+            // Archives generated by another major version are rejected by SoH: delete them so they are regenerated silently
+            int portMajor = GetShipArchiveMajorVersion(Path.Combine(_path, "soh.o2r"));
+            if (portMajor >= 0)
             {
-                string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
-                try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to SOH folder."); }
+                foreach (string archive in new[] { vanillaArchive, mqArchive })
+                {
+                    int gameMajor = GetShipArchiveMajorVersion(archive);
+                    if (gameMajor >= 0 && gameMajor != portMajor)
+                    {
+                        SimpleLogger.Instance.Info("[INFO] SoH: " + Path.GetFileName(archive) + " generated by version " + gameMajor + ".x, regenerating for version " + portMajor + ".x");
+                        try { File.Delete(archive); } catch { }
+                    }
+                }
+            }
+
+            if (!File.Exists(vanillaArchive) && !File.Exists(mqArchive))
+            {
+                // SoH extracts the ROM when its path is passed as argument (extension check is case-sensitive)
+                string romExt = Path.GetExtension(rom);
+                if (romExt == ".z64" || romExt == ".n64" || romExt == ".v64")
+                    commandArray.Add("\"" + rom + "\"");
+                else
+                {
+                    // Fallback: copy the ROM next to the exe so SoH's own ROM search can find it
+                    string emulatorRom = Path.Combine(_path, Path.GetFileName(rom));
+                    if (!File.Exists(emulatorRom))
+                        try { File.Copy(rom, emulatorRom); } catch { SimpleLogger.Instance.Warning("[WARNING] Impossible to copy game file to SOH folder."); }
+                }
             }
 
             // Settings
-            JObject jsonObj;
-            JObject cvars;
-            //JObject itemtracker;
-            //JObject gdevelopertools;
-            //JObject grando;
-            JObject gsettings;
-            JObject advres;
-            JObject intscale;
-            JObject controllers;
-            JObject gwindows;
-            JObject window;
-            JObject wbackend;
-            JObject fs;
-
             string settingsFile = Path.Combine(_path, "shipofharkinian.json");
-            
-            // Initialize JSON structure
+
+            JObject jsonObj = null;
             if (File.Exists(settingsFile))
             {
-                string jsonString = File.ReadAllText(settingsFile);
-                try { jsonObj = JObject.Parse(jsonString); } catch { jsonObj = new JObject(); }
+                try { jsonObj = JObject.Parse(File.ReadAllText(settingsFile)); } catch { }
             }
-            else
+            if (jsonObj == null)
                 jsonObj = new JObject();
 
-            if (jsonObj["CVars"] == null)
-            {
-                cvars = new JObject();
-                jsonObj["CVars"] = cvars;
-            }
-            else
-                cvars = (JObject)jsonObj["CVars"];
-
-            if (cvars["gSettings"] == null)
-            {
-                gsettings = new JObject();
-                cvars["gSettings"] = gsettings;
-            }
-            else
-                gsettings = (JObject)cvars["gSettings"];
-
-            if (cvars["gOpenWindows"] == null)
-            {
-                gwindows = new JObject();
-                cvars["gOpenWindows"] = gwindows;
-            }
-            else
-                gwindows = (JObject)cvars["gOpenWindows"];
-
-            if (gsettings["AdvancedResolution"] == null)
-            {
-                advres = new JObject();
-                gsettings["AdvancedResolution"] = advres;
-            }
-            else
-                advres = (JObject)gsettings["AdvancedResolution"];
+            // LUS saves empty objects as null, so containers must be type-checked, not only null-checked
+            JObject cvars = GetOrCreateJObject(jsonObj, "CVars");
+            JObject gsettings = GetOrCreateJObject(cvars, "gSettings");
+            JObject gwindows = GetOrCreateJObject(cvars, "gOpenWindows");
+            JObject advres = GetOrCreateJObject(gsettings, "AdvancedResolution");
 
             advres.Remove("IntegerScale");
-            if (advres["IntegerScale"] == null)
-            {
-                intscale = new JObject();
-                advres["IntegerScale"] = intscale;
-            }
-            else
-                intscale = (JObject)advres["IntegerScale"];
+            JObject intscale = new JObject();
+            advres["IntegerScale"] = intscale;
 
-            if (gsettings["Controllers"] == null)
-            {
-                controllers = new JObject();
-                gsettings["Controllers"] = controllers;
-            }
-            else
-                controllers = (JObject)gsettings["Controllers"];
-
-            if (jsonObj["Window"] == null)
-            {
-                window = new JObject();
-                jsonObj["Window"] = window;
-            }
-            else
-                window = (JObject)jsonObj["Window"];
-
-            if (window["Backend"] == null)
-            {
-                wbackend = new JObject();
-                window["Backend"] = wbackend;
-            }
-            else
-                wbackend = (JObject)window["Backend"];
-
-            if (window["Fullscreen"] == null)
-            {
-                fs = new JObject();
-                window["Fullscreen"] = fs;
-            }
-            else
-                fs = (JObject)window["Fullscreen"];
+            JObject controllers = GetOrCreateJObject(gsettings, "Controllers");
+            JObject window = GetOrCreateJObject(jsonObj, "Window");
+            JObject wbackend = GetOrCreateJObject(window, "Backend");
+            JObject fs = GetOrCreateJObject(window, "Fullscreen");
 
             gwindows["Menu"] = 0;
             gsettings["ControlNav"] = 1;
@@ -1754,7 +1773,8 @@ namespace EmulatorLauncher
             if (advres["UIComboItem"] == null)
                 advres["UIComboItem"] = new JObject();
 
-            advres["UIComboItem"]["AspectRatio"] = 1;
+            // Aspect ratio
+            GetOrCreateJObject(advres, "UIComboItem")["AspectRatio"] = 1;
 
             if (SystemConfig.isOptSet("soh_Ratio") && !string.IsNullOrEmpty(SystemConfig["soh_Ratio"]))
             {
@@ -1868,12 +1888,7 @@ namespace EmulatorLauncher
             settings["ControllerRumblePlayer2"] = rumble;
 
 
-            if (SystemConfig.isOptSet("MonitorIndex") && !string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
-            {
-                settings["DisplayIndex"] = (SystemConfig["MonitorIndex"].ToInteger() - 1).ToString();
-            }
-            else
-                settings["DisplayIndex"] = "0";
+            settings["DisplayIndex"] = Displays.IndexOf(Program.TargetScreen, MonitorOrder.SdlLike).ToString();
 
             BindFeature(settings, "RenderMethod", "sonic3_renderer", "opengl-full");
             BindFeature(settings, "FrameSync", "sonic3_vsync", "1");
@@ -2292,7 +2307,7 @@ namespace EmulatorLauncher
 
             if (SystemConfig.isOptSet("starship_fps") && !string.IsNullOrEmpty(SystemConfig["starship_fps"]))
             {
-                int starshipFPS = SystemConfig["starship_fps"].ToInteger();
+                int starshipFPS = SystemConfig["starship_fps"].ToIntegerString().ToInteger();
                 cvars["gInterpolationFPS"] = starshipFPS;
                 cvars["gMatchRefreshRate"] = 0;
             }

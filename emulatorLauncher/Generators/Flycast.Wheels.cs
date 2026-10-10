@@ -53,6 +53,11 @@ namespace EmulatorLauncher
             YmlContainer wheel1Mapping = null;
             Dictionary<string, string> wheel1buttonMap = new Dictionary<string, string>();
             string flycastWheelMapping = Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "wheels", "flycast_wheels.yml");
+            if (racingController && File.Exists(Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "wheels", "flycast_racing_wheels.yml")))
+                flycastWheelMapping = Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "wheels", "flycast_racing_wheels.yml");
+            if (_isArcade && File.Exists(Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "wheels", "flycast_arcade_wheels.yml")))
+                flycastWheelMapping = Path.Combine(AppConfig.GetFullPath("retrobat"), "system", "resources", "inputmapping", "wheels", "flycast_arcade_wheels.yml");
+            
             if (File.Exists(flycastWheelMapping))
             {
                 ymlFile = YmlFile.Load(flycastWheelMapping);
@@ -370,12 +375,14 @@ namespace EmulatorLauncher
                     code = code.TrimEnd('+', '-');
                     triggerCodes.Add(code + (reverse ? "~" : ""));
                 }
-                if (triggerCodes.Count > 0)
-                    ctrlini.WriteValue("emulator", "triggers", string.Join(",", triggerCodes));
+                
+                if (wheel1buttonMap.TryGetValue("triggers", out string wheelTriggers) && !string.IsNullOrEmpty(wheelTriggers))
+                    ctrlini.WriteValue("emulator", "triggers", wheelTriggers);
 
-                ctrlini.WriteValue("emulator", "dead_zone", "1");
+                BindIniFeatureSlider(ctrlini, "emulator", "dead_zone", "flycast_deadzone", "10");
                 ctrlini.WriteValue("emulator", "mapping_name", deviceName);
                 ctrlini.WriteValue("emulator", "rumble_power", "100");
+                BindIniFeatureSlider(ctrlini, "emulator", "saturation", "flycast_saturation", "100");
                 ctrlini.WriteValue("emulator", "version", "4");
 
                 ctrlini.Save();
@@ -392,6 +399,13 @@ namespace EmulatorLauncher
                 ini.WriteValue("input", "device1.2", SystemConfig["flycast_extension1"]);
             else
                 ini.WriteValue("input", "device1.2", "10");
+
+            // when using Racing Controller - there's only one slot, so in case purupuru extension is chosen, set it in slot 1
+            if (SystemConfig.isOptSet("flycast_controller1") && racingControllerP1 && SystemConfig["flycast_extension1"] == "3")
+            {
+                ini.WriteValue("input", "device1.1", "3");
+                ini.WriteValue("input", "device2.1", "1");
+            }
 
             // Setup second wheel
             if (usableWheels.Count > 1)
@@ -724,10 +738,11 @@ namespace EmulatorLauncher
                         code = code.TrimEnd('+', '-');
                         triggerCodes.Add(code + (reverse ? "~" : ""));
                     }
-                    if (triggerCodes.Count > 0)
-                        ctrlini.WriteValue("emulator", "triggers", string.Join(",", triggerCodes));
+                    if (wheel2buttonMap.TryGetValue("triggers", out string wheelTriggers2) && !string.IsNullOrEmpty(wheelTriggers2))
+                        ctrlini.WriteValue("emulator", "triggers", wheelTriggers2);
 
-                    ctrlini.WriteValue("emulator", "dead_zone", "1");
+                    BindIniFeatureSlider(ctrlini, "emulator", "dead_zone", "flycast_deadzone", "10");
+                    BindIniFeatureSlider(ctrlini, "emulator", "saturation", "flycast_saturation", "100");
                     ctrlini.WriteValue("emulator", "mapping_name", deviceName2);
                     ctrlini.WriteValue("emulator", "rumble_power", "100");
                     ctrlini.WriteValue("emulator", "version", "4");
@@ -757,7 +772,7 @@ namespace EmulatorLauncher
             }
 
             if (mapping.ContainsKey(buttonkey))
-                    Binds.Add(mapping[buttonkey] + ":" + target);
+                Binds.Add(mapping[buttonkey] + ":" + target);
         }
     }
 }

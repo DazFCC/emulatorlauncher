@@ -61,10 +61,18 @@ namespace EmulatorLauncher
             else if (Path.GetExtension(rom).ToLower() == ".m3u")
             {
                 string romPath = Path.GetDirectoryName(rom);
-                string romSubPath = File.ReadAllText(rom);
+
+                // Use the first non-empty, non-comment line (m3u files usually end with a newline)
+                string romSubPath = File.ReadAllLines(rom)
+                    .Select(l => l.Trim())
+                    .FirstOrDefault(l => !string.IsNullOrEmpty(l) && !l.StartsWith("#"));
+
+                if (string.IsNullOrEmpty(romSubPath))
+                    throw new ApplicationException("Unable to find any game in the provided m3u file");
+
                 rom = Path.Combine(romPath, romSubPath);
             }
-            
+
             else if (Path.GetExtension(rom).ToLower() == ".lnk")
             {
                 targetRom = FileTools.GetShortcutArgswsh(rom);
@@ -82,9 +90,11 @@ namespace EmulatorLauncher
             {
                 if (SystemConfig.getOptBoolean("shadps4_gui"))
                 {
-                    commandArray.Add("-s");
                     _showGUI = true;
                 }
+
+                if (SystemConfig.getOptBoolean("shadps4_configglobal"))
+                    commandArray.Add("--config-global");
 
                 if (Path.GetExtension(rom).ToLower() == ".lnk")
                 {
@@ -117,7 +127,17 @@ namespace EmulatorLauncher
                 }
 
                 if (SystemConfig.getOptBoolean("shadps4_gui"))
+                {
+                    // The launcher stays open after the game exits: allow hotkey + start to close it
+                    _showGUI = true;
                     commandArray.Add("-s");
+                }
+
+                if (SystemConfig.getOptBoolean("shadps4_configglobal"))
+                {
+                    commandArray.Add("--");
+                    commandArray.Add("--config-global");
+                }
             }
 
             string args = string.Join(" ", commandArray);
@@ -174,6 +194,7 @@ namespace EmulatorLauncher
 
             BindBoolFeature(general, "discord_rpc_enabled", "discord");
             BindBoolFeatureOn(input, "motion_controls_enabled", "shadps4_motion");
+            BindBoolFeature(general, "redzone_patches", "shadps4_redzone");
             general["show_splash"] = false;
 
             string homeDir = Path.Combine(AppConfig.GetFullPath("saves"), "ps4", "shadps4", "home");
@@ -208,11 +229,11 @@ namespace EmulatorLauncher
             
             general["console_language"] = ps4Lang;
 
-            string dlcPath = Path.Combine(romPath, "ps4", "DLC");
+            string dlcPath = Path.Combine(AppConfig.GetFullPath("roms"), "ps4", "DLC");
             if (!Directory.Exists(dlcPath))
                 try { Directory.CreateDirectory(dlcPath); } catch { }
             
-            general["addonInstallDir"] = dlcPath;
+            general["addon_install_dir"] = dlcPath;
 
             //SetupController(input);
 
@@ -233,36 +254,39 @@ namespace EmulatorLauncher
                 string escaped = Regex.Replace(versionPath, @"(?<!\\)\\(?!\\)", @"\\");
                 ini.WriteValue("version_manager", "versionPath", escaped);
 
-                string selectedVersion = ini.GetValue("version_manager", "selectedVersion");
+                // "-d" starts the version stored in versionSelected: reset it when it no longer points to an existing executable
+                // (happens when a RetroBat update replaces the shipped shadPS4 version)
+                string selectedVersion = ini.GetValue("version_manager", "versionSelected");
 
-                if (string.IsNullOrEmpty(selectedVersion) && _versionselected != null)
+                if (_versionselected != null && !ShadPS4ExecutableExists(path, selectedVersion))
                     ini.WriteValue("version_manager", "versionSelected", _versionselected);
 
                 ini.WriteValue("general_settings", "checkForUpdates", "false");
                 ini.WriteValue("general_settings", "showChangeLog", "false");
+                ini.WriteValue("version_manager", "checkOnStartup", "false");
+                ini.WriteValue("general_settings", "checkCompatibilityAtStartup", "false");
+                ini.WriteValue("version_manager", "showChangeLog", "false");
 
                 ini.Save();
             }
         }
 
-        private void UpdateSdlControllersWithHints()
+        private static bool ShadPS4ExecutableExists(string path, string exe)
         {
-            if (Program.Controllers.Count(c => !c.IsKeyboard) == 0)
-                return;
+            if (string.IsNullOrEmpty(exe))
+                return false;
 
-            var hints = new List<string>
+            try
             {
-                "SDL_JOYSTICK_RAWINPUT = 1",
-            };
+                // QSettings stores backslashes escaped; relative paths are resolved from the emulator folder (launcher working directory)
+                exe = exe.Trim('"').Replace(@"\\", @"\");
 
-            if (SystemConfig.getOptBoolean("ps_controller_enhanced"))
-            {
-                hints.Add("SDL_JOYSTICK_HIDAPI_PS4_RUMBLE = 1");
-                hints.Add("SDL_JOYSTICK_HIDAPI_PS5_RUMBLE = 1");
+                if (!Path.IsPathRooted(exe))
+                    exe = Path.Combine(path, exe);
+
+                return File.Exists(exe);
             }
-
-            SdlGameController.ReloadWithHints(string.Join(",", hints));
-            Program.Controllers.ForEach(c => c.ResetSdlController());
+            catch { return false; }
         }
 
         private void SetupController(JObject input)
@@ -273,8 +297,6 @@ namespace EmulatorLauncher
                 return;
             }
 
-            UpdateSdlControllersWithHints();
-
             var ctrl = this.Controllers.Where(c => c.PlayerIndex == 1).FirstOrDefault();
 
             if (ctrl?.Config == null)
@@ -282,12 +304,6 @@ namespace EmulatorLauncher
 
             if (ctrl.Sdl3Controller == null || string.IsNullOrEmpty(ctrl.Sdl3Controller.GuidString))
                 return;
-
-            try
-            {
-                Environment.SetEnvironmentVariable("SDL_JOYSTICK_RAWINPUT", "1", EnvironmentVariableTarget.Process);
-            }
-            catch { }
 
             input["use_unified_input_config"] = true;
             input["default_controller_id"] = ctrl.Sdl3Controller.GuidString;
@@ -421,7 +437,7 @@ namespace EmulatorLauncher
                     if (target == null)
                     {
                         target = parsed
-                            .Where(x => x.Version != null)
+                            .Where(x => x.Version != null && x.Entry.type == 0)
                             .OrderByDescending(x => x.Version)
                             .FirstOrDefault();
                     }
@@ -446,10 +462,12 @@ namespace EmulatorLauncher
                     {
                         _versionselected = target.Entry.path;
 
-                        if ((target.Entry.path).StartsWith("./"))
-                            return Path.Combine(path, target.Entry.path.Replace("./", "").Replace("/", "\\"));
-                        else
-                            return target.Entry.path;
+                        // Relative paths are resolved from the emulator folder (launcher working directory)
+                        string versionExe = target.Entry.path.Replace("/", "\\");
+                        if (!Path.IsPathRooted(versionExe))
+                            versionExe = Path.GetFullPath(Path.Combine(path, versionExe));
+
+                        return versionExe;
                     }
                 }
                 catch (Exception ex)

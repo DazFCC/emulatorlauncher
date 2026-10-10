@@ -12,7 +12,6 @@ namespace EmulatorLauncher
 {
     partial class DuckstationGenerator : Generator
     {
-        private bool _sindenSoft = false;
         private bool _multigun = false;
 
         private void CreateGunConfiguration(IniFile ini)
@@ -59,7 +58,6 @@ namespace EmulatorLauncher
             if (guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
             {
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
             }
 
             string pointer1 = "Pointer-0";
@@ -237,7 +235,7 @@ namespace EmulatorLauncher
                     crosshairSize = scale.ToString("0.000000", CultureInfo.InvariantCulture);
             }
             ini.WriteValue(padNumber1, "CrosshairScale", crosshairSize);
-            BindIniFeature(ini, padNumber1, "CrosshairColor", "duck_crosshair_color2", "#00ff00");
+            BindIniFeature(ini, padNumber1, "CrosshairColor", "duck_crosshair_color1", "#00ff00");
 
             BindIniFeatureSlider(ini, padNumber1, "XScale", "duck_gun_xscale", "0.930000", 6);
 

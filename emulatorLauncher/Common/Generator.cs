@@ -27,6 +27,7 @@ namespace EmulatorLauncher
         protected EsFeatures Features { get { return Program.Features; } }
         protected ConfigFile AppConfig { get { return Program.AppConfig; } }
         protected ConfigFile SystemConfig { get { return Program.SystemConfig; } }
+        protected System.Windows.Forms.Screen TargetScreen { get { return Program.TargetScreen; } }
         protected List<Controller> Controllers { get { return Program.Controllers; } }
         
         #region Custom game unzip
@@ -136,6 +137,10 @@ namespace EmulatorLauncher
         public virtual void Cleanup()
         {
             SimpleLogger.Instance.Info("[Generator] Cleanup.");
+
+            // Close the Sinden software if it was started for this game (and "sindenKill" option is set)
+            Guns.KillSindenSoftware();
+
             if (_mountFile != null)
             {
                 // Delete overlay path if it's empty
@@ -342,6 +347,7 @@ namespace EmulatorLauncher
             string[] scummVMExtensions = new string[] { ".scummvm" };
             string[] snesMSUExtensions = new string[] { ".sfc", ".smc" };
             string[] sgbMSUExtensions = new string[] { ".gb", ".gbc" };
+            string[] zc255Extensions = new string[] { ".qst" };
             string[] extensions = new string[] { };
             bool tryMount = false;
             bool silent = false;
@@ -381,6 +387,10 @@ namespace EmulatorLauncher
                 extensions = sgbMSUExtensions;
                 tryMount = true;
             }
+            else if (core == "zc255")
+            {
+                extensions = zc255Extensions;
+            }
 
             else
                 return null;
@@ -414,43 +424,99 @@ namespace EmulatorLauncher
         }
 
         public ExitCodes ExitCode { get; protected set; }
+        public int RawExitCode { get; protected set; }
         #endregion
-        
+
         public abstract ProcessStartInfo Generate(string system, string emulator, string core, string rom, string playersControllers, ScreenResolution resolution);
 
         public virtual int RunAndWait(ProcessStartInfo path)
         {
-            try 
-            {
-                var process = Process.Start(path);
+            var process = StartEmulator(path);
+            if (process == null)
+                return ExitCode == ExitCodes.CustomError ? -1 : 0;
 
+            try
+            {
                 bool isBatch = !string.IsNullOrEmpty(path?.FileName) && (path.FileName.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) || path.FileName.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase));
                 bool isLnkorUrl = !string.IsNullOrEmpty(path?.FileName) && (path.FileName.EndsWith(".url", StringComparison.OrdinalIgnoreCase) || path.FileName.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase));
 
                 if (!isBatch && !isLnkorUrl)
+                {
                     Job.Current.AddProcess(process);
-                
+                    ApplyScreenPlacement(process);
+                }
+
                 process.WaitForExit();
-                SimpleLogger.Instance.Info("[Generator] Process exited with code " + process.ExitCode);
-                int exitCode = process.ExitCode;
+
+                int exitCode = ReportExitCode(process, path);
 
                 if (exitCode == unchecked((int)0xc0000005)) // Null pointer - happen sometimes with Yuzu
+                {
+                    SimpleLogger.Instance.Warning("[Generator] Emulator crashed on exit (access violation) - ignored.");
                     return 0;
+                }
 
                 if (exitCode == unchecked((int)0xc0000374)) // Heap corruption - happen sometimes with scummvm
+                {
+                    SimpleLogger.Instance.Warning("[Generator] Emulator crashed on exit (heap corruption) - ignored.");
                     return 0;
+                }
 
                 if (exitCode == -1 || exitCode == 1) // Happens with some emulators (WinUAE)
                     return 0;
 
-                if (exitCode == unchecked((int)0xC000013A))
+                if (exitCode == unchecked((int)0xC000013A)) // Console closed by the user
                     return 0;
 
                 return exitCode;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SimpleLogger.Instance.Error("[Generator] Error while waiting for the emulator : " + ex.Message, ex);
+            }
 
             return -1;
+        }
+
+        /// <summary>
+        /// Starts the emulator process and reports a launch failure the same way RunAndWait does.
+        /// Generators that need their own process loop must use this instead of Process.Start, so they
+        /// also benefit from the launch diagnostics. Returns null when the process could not be started.
+        /// </summary>
+        protected Process StartEmulator(ProcessStartInfo path)
+        {
+            try
+            {
+                var process = Process.Start(path);
+                if (process == null)
+                    SimpleLogger.Instance.Warning("[Generator] Process.Start returned null, nothing to wait for.");
+
+                return process;
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Instance.Error("[Generator] Unable to start process : " + ex.Message, ex);
+                SetCustomError(LaunchDiagnostics.FromException(ex, path));
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Records the real exit code and turns a known Windows failure status into a user message.
+        /// Returns the exit code unchanged, so the caller keeps deciding what to do with it.
+        /// </summary>
+        protected int ReportExitCode(Process process, ProcessStartInfo path)
+        {
+            try { RawExitCode = process.ExitCode; }
+            catch (Exception ex) { SimpleLogger.Instance.Warning("[Generator] Unable to read exit code : " + ex.Message); }
+
+            SimpleLogger.Instance.Info("[Generator] Process exited with code " + RawExitCode + " (0x" + RawExitCode.ToString("X8") + ")");
+
+            string diagnostic = LaunchDiagnostics.FromExitCode(RawExitCode, path);
+            if (diagnostic != null)
+                SetCustomError(diagnostic);
+
+            return RawExitCode;
         }
 
         public bool DependsOnDesktopResolution { get; protected set; }
@@ -586,6 +652,48 @@ namespace EmulatorLauncher
             return isWindowed && bounds.Width > 0 && bounds.Height > 0;
         }
         #endregion
+
+        /// <summary>
+        /// Enable moving the emulator window to the target screen after launch (only when MonitorIndex is set, fullscreen only).
+        /// </summary>
+        protected virtual bool UseGenericScreenPlacement { get { return false; } }
+
+        /// <summary>
+        /// Selects the emulator render window among the visible windows of the process.
+        /// </summary>
+        protected virtual bool IsScreenPlacementWindow(IntPtr hWnd)
+        {
+            var rect = User32.GetWindowRect(hWnd);
+            return (rect.right - rect.left) > 100 && (rect.bottom - rect.top) > 100;
+        }
+
+        protected void ApplyScreenPlacement(Process process)
+        {
+            if (!UseGenericScreenPlacement || process == null)
+                return;
+
+            if (!SystemConfig.isOptSet("MonitorIndex") || string.IsNullOrEmpty(SystemConfig["MonitorIndex"]))
+                return;
+
+            // Windowed mode : keep the emulator's own placement and size
+            if (!ShouldRunFullscreen())
+                return;
+
+            try
+            {
+                // Wait for the fullscreen window, so the emulator cannot re-apply fullscreen on its initial screen afterwards
+                IntPtr hWnd = ScreenTools.WaitForReadyWindow(process, IsScreenPlacementWindow, true);
+                if (hWnd == IntPtr.Zero)
+                    return;
+
+                ScreenTools.HoldWindowOnScreen(process, hWnd, Program.TargetScreen);
+                User32.SetForegroundWindow(hWnd);
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Instance.Warning("[SCREENMOVER] Screen placement failed : " + ex.Message);
+            }
+        }
 
         public static bool ShouldRunFullscreen()
         {
@@ -733,6 +841,7 @@ namespace EmulatorLauncher
             }
         }
 
+        // BmL bindfeatures
         protected void BindBoolFeature(BmlContainer cfg, string settingName, string featureName, string trueValue, string falseValue, bool force = false)
         {
             if (force || Features.IsSupported(featureName))
@@ -1238,6 +1347,35 @@ namespace EmulatorLauncher
                 ini.WriteValue(section, settingName, pathName);
         }
 
+        // Blastem config file
+        protected void BindFeature(BlastemConfigNode cfg, string settingName, string featureName, string defaultValue, bool force = false)
+        {
+            if (force || Features.IsSupported(featureName))
+                cfg[settingName] = SystemConfig.GetValueOrDefault(featureName, defaultValue);
+        }
+
+        protected void BindBoolFeature(BlastemConfigNode cfg, string settingName, string featureName, string trueValue, string falseValue, bool force = false)
+        {
+            if (force || Features.IsSupported(featureName))
+            {
+                if (SystemConfig.isOptSet(featureName) && SystemConfig.getOptBoolean(featureName))
+                    cfg[settingName] = trueValue;
+                else
+                    cfg[settingName] = falseValue;
+            }
+        }
+
+        protected void BindBoolFeatureOn(BlastemConfigNode cfg, string settingName, string featureName, string trueValue, string falseValue, bool force = false)
+        {
+            if (force || Features.IsSupported(featureName))
+            {
+                if (SystemConfig.isOptSet(featureName) && !SystemConfig.getOptBoolean(featureName))
+                    cfg[settingName] = falseValue;
+                else
+                    cfg[settingName] = trueValue;
+            }
+        }
+
         // JGenesis
         protected void BindBoolIniFeature(IniFileJGenesis ini, string section, string settingName, string featureName, string trueValue, string falseValue, bool force = false)
         {
@@ -1333,6 +1471,17 @@ namespace EmulatorLauncher
             IntPtr hdc = GetDC(IntPtr.Zero);
             int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
             return dpiX / 96.0f; // 96 is the default (100%) DPI
+        }
+
+        /// <summary>
+        /// Current display mode of the screen where the game is displayed (Program.TargetScreen).
+        /// Falls back to the primary screen.
+        /// </summary>
+        public static ScreenResolution GetTargetScreenResolution()
+        {
+            var screen = Program.TargetScreen;
+            var res = screen != null ? ScreenResolution.GetCurrentResolution(screen.DeviceName) : null;
+            return res ?? ScreenResolution.CurrentResolution;
         }
     }
 

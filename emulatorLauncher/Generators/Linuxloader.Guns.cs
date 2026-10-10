@@ -12,23 +12,6 @@ namespace EmulatorLauncher
     {
         private bool _demulshooter = false;
 
-        /// <summary>
-        /// If controller autoconfig is off but use_guns is on.
-        /// </summary>
-        /// <param name="cfgPath"></param>
-        /// <param name="system"></param>
-        private void ConfigureLindberghGunsAutoOff(string cfgPath, string system)
-        {
-            SimpleLogger.Instance.Info("[INFO] Configuring guns.");
-
-            using (var ini = new IniFile(cfgPath, IniOptions.UseSpaces))
-            {
-                ConfigureLindberghGuns(ini, "lindbergh", true);
-                
-                ini.Save();
-            }
-        }
-
         private void ConfigureLindberghGuns(IniFile ini, string system, bool autoconfOff = false)
         {
             bool configGuns = SystemConfig.getOptBoolean("use_guns");
@@ -48,7 +31,6 @@ namespace EmulatorLauncher
             if (guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
             {
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
             }
 
             // If DemulShooter is enabled, configure it
@@ -121,6 +103,14 @@ namespace EmulatorLauncher
                             break;
                     }
                 }
+            }
+
+            // Optional auto-centering of the gun aiming axis (useful when using a gamepad instead of a lightgun)
+            if (SystemConfig.isOptSet("ll_gun_centering") && !string.IsNullOrEmpty(SystemConfig["ll_gun_centering"]))
+            {
+                string centering = SystemConfig.getOptBoolean("ll_gun_centering") ? "1" : "0";
+                ini.WriteValue("Config", "GunX_Centering", centering);
+                ini.WriteValue("Config", "GunY_Centering", centering);
             }
 
             if (SystemConfig.isOptSet("ll_gunaxis_invert") && !string.IsNullOrEmpty(SystemConfig["ll_gunaxis_invert"]))

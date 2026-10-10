@@ -10,8 +10,6 @@ namespace EmulatorLauncher.Libretro
 {
     partial class LibRetroGenerator : Generator
     {
-        private bool _sindenSoft = false;
-
         /// <summary>
         /// Injects guns settings
         /// </summary>
@@ -49,7 +47,6 @@ namespace EmulatorLauncher.Libretro
             {
                 // Start Sinden software automatically if a sinden gun is connected
                 Guns.StartSindenSoftware();
-                _sindenSoft = true;
             }
 
             // Set multigun to true in some cases
@@ -198,7 +195,7 @@ namespace EmulatorLauncher.Libretro
                 // Nullify all buttons after playerindex
                 if (guns.Length <= 16)
                 {
-                    for (int i = playerIndex + 1; i == 16; i++)
+                    for (int i = playerIndex + 1; i <= 16; i++)
                     {
                         foreach (string cfg in gunButtons)
                             retroarchConfig["input_player" + i + cfg] = "nul";
@@ -210,7 +207,7 @@ namespace EmulatorLauncher.Libretro
                 // Nullify all buttons after guns.length
                 if (guns.Length <= 16)
                 {
-                    for (int i = guns.Length + 1; i == 16; i++)
+                    for (int i = guns.Length + 1; i <= 16; i++)
                     {
                         foreach (string cfg in gunButtons)
                             retroarchConfig["input_player" + i + cfg] = "nul";
@@ -474,7 +471,7 @@ namespace EmulatorLauncher.Libretro
                 retroarchConfig["input_player" + playerIndex + "_gun_dpad_right"] = "right";
 
                 // Case of justifiers (use port 3)
-                if (SystemConfig.isOptSet("gun_type") && SystemConfig["gun_type"] == "justifiers" && guns[1] != null && playerIndex == 2)
+                if (SystemConfig.isOptSet("gun_type") && SystemConfig["gun_type"] == "justifiers" && guns.Length > 1 && playerIndex == 2)
                 {
                     retroarchConfig["input_driver"] = "raw";
                     int deviceIndex2 = guns[1].Index;

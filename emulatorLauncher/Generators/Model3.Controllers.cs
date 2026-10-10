@@ -7,15 +7,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using System.Windows.Media.Media3D;
 using DI = SharpDX.DirectInput;
 
 namespace EmulatorLauncher
 {
     partial class Model3Generator : Generator
     {
-        private bool _sindenSoft = false;
-
         // Gun configuration variables
         private string _mouse1 = "MOUSE1";
         private string _mouse2 = "MOUSE2";
@@ -59,7 +56,6 @@ namespace EmulatorLauncher
                 if (useGun && guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
                 {
                     Guns.StartSindenSoftware();
-                    _sindenSoft = true;
                 }
             }
 
@@ -2629,32 +2625,6 @@ namespace EmulatorLauncher
             { "east", "BUTTON2" }
         };
 
-        private static RawInputDevice FindAssociatedKeyboard(string gunPath, List<RawInputDevice> keyboards, RawInputDevice keyboard)
-        {
-            // Handle Wiimote4Guns differently
-            if (gunPath.ToLowerInvariant().Contains("vmulti"))
-            {
-                string gunIdentifier = "";
-                if (gunPath.ToLowerInvariant().Contains("vmultia"))
-                    gunIdentifier = "vmultia";
-                else if (gunPath.ToLowerInvariant().Contains("vmultib"))
-                    gunIdentifier = "vmultib";
-                else if (gunPath.ToLowerInvariant().Contains("vmultic"))
-                    gunIdentifier = "vmultic";
-                else if (gunPath.ToLowerInvariant().Contains("vmultid"))
-                    gunIdentifier = "vmultid";
-
-                foreach (var kb in keyboards)
-                {
-                    if (kb.DevicePath.ToLowerInvariant().Contains(gunIdentifier))
-                    {
-                        return kb;
-                    }
-                }
-            }
-            return keyboard;
-        }
-
         private void ConfigureGuns(IniFile ini, RawLightgun[] guns)
         {
             bool useGun = SystemConfig.getOptBoolean("use_guns");
@@ -2664,22 +2634,10 @@ namespace EmulatorLauncher
             var hidDevices = RawInputDevice.GetRawInputDevices().ToList();
             var keyboards = hidDevices.Where(t => t.Type == RawInputDeviceType.Keyboard).OrderBy(u => u.DevicePath).ToList();
 
-            // Keyboard association for Wiimote4Guns
-            Dictionary<RawLightgun, RawInputDevice> gunsKbAssociation = new Dictionary<RawLightgun, RawInputDevice>();
-            if (guns.Any(g => g.Type == RawLighGunType.Wiimote4Guns))
-            {
-                SimpleLogger.Instance.Info("[GUNS] Found " + keyboards.Count + " usable keyboards.");
-
-                foreach (var gun in guns.Where(g => g.Type == RawLighGunType.Wiimote4Guns))
-                {
-                    var associatedKeyboard = FindAssociatedKeyboard(gun.DevicePath, keyboards, null);
-                    if (associatedKeyboard != null)
-                    {
-                        gunsKbAssociation.Add(gun, associatedKeyboard);
-                        SimpleLogger.Instance.Info("[GUNS] Associated keyboard for " + gun.Name + ": " + associatedKeyboard.FriendlyName);
-                    }
-                }
-            }
+            // Keyboard association for Wiimote guns (log only)
+            var gunsKbAssociation = RawLightgun.AssociateGunKeyboards(guns, keyboards, null);
+            foreach (var pair in gunsKbAssociation.Where(p => p.Value != null))
+                SimpleLogger.Instance.Info("[GUNS] Associated keyboard for " + pair.Key.Name + ": " + (pair.Value.FriendlyName ?? pair.Value.DevicePath));
 
             // default to multigun if we have more than one usable gun and the inputdriver is not set to sdl (which do not support multigun)
             bool hasSdlInputDriverConfigured = SystemConfig.isOptSet("inputdriver") && SystemConfig["inputdriver"].StartsWith("sdl");
@@ -2702,30 +2660,6 @@ namespace EmulatorLauncher
 
             if (_gunCount > 0 && guns.Length > 0)
             {
-                // Process guns based on their priority order from RawLightGun.cs
-                var wiimote4Guns = guns.Where(g => g.Type == RawLighGunType.Wiimote4Guns).ToArray();
-
-                // Map vmulti* identifiers to system indexes for Wiimote4Guns
-                var vmultiToSystemIndex = new Dictionary<string, int>();
-                for (int i = 0; i < guns.Length; i++)
-                {
-                    if (guns[i].Type == RawLighGunType.Wiimote4Guns && guns[i].DevicePath != null)
-                    {
-                        string vmultiId = "";
-                        if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultia"))
-                            vmultiId = "vmultia";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultib"))
-                            vmultiId = "vmultib";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultic"))
-                            vmultiId = "vmultic";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultid"))
-                            vmultiId = "vmultid";
-
-                        if (!string.IsNullOrEmpty(vmultiId))
-                            vmultiToSystemIndex[vmultiId] = guns[i].Index + 1;
-                    }
-                }
-
                 // Apply Supermodel inversion: MOUSE(N) = TotalSouris - SystemIndex + 1
                 int totalMice = guns.Length;
 
@@ -2742,31 +2676,13 @@ namespace EmulatorLauncher
                     else if (playerCount == 2)
                         mouseIndex2 = supermodelIndex;
 
-                    // Log based on gun type
-                    if (guns[i].Type == RawLighGunType.Wiimote4Guns)
+                    if (gunsKbAssociation.ContainsKey(guns[i]) && gunsKbAssociation[guns[i]] != null)
                     {
-                        string vmultiId = "";
-                        if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultia"))
-                            vmultiId = "vmultia";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultib"))
-                            vmultiId = "vmultib";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultic"))
-                            vmultiId = "vmultic";
-                        else if (guns[i].DevicePath.ToLowerInvariant().Contains("vmultid"))
-                            vmultiId = "vmultid";
+                        int kbIndex = keyboards.IndexOf(gunsKbAssociation[guns[i]]) + 1;
+                        SimpleLogger.Instance.Info("[GUNS] P" + playerCount + " (" + guns[i].Name + ") keyboard index: " + kbIndex);
+                    }
 
-                        if (gunsKbAssociation.ContainsKey(guns[i]))
-                        {
-                            var kb = gunsKbAssociation[guns[i]];
-                            int kbIndex = keyboards.IndexOf(kb) + 1;
-                            SimpleLogger.Instance.Info("[GUNS] P" + playerCount + " (" + vmultiId + ") keyboard index: " + kbIndex);
-                        }
-                        SimpleLogger.Instance.Info("[GUNS] P" + playerCount + " (" + vmultiId + ") system index: " + systemIndex + " → Supermodel MOUSE" + supermodelIndex);
-                    }
-                    else
-                    {
-                        SimpleLogger.Instance.Info("[GUNS] P" + playerCount + " (" + guns[i].Type + ") system index: " + systemIndex + " → Supermodel MOUSE" + supermodelIndex);
-                    }
+                    SimpleLogger.Instance.Info("[GUNS] P" + playerCount + " (" + guns[i].Type + " - " + guns[i].Name + ") system index: " + systemIndex + " → Supermodel MOUSE" + supermodelIndex);
                 }
 
                 SimpleLogger.Instance.Info("[GUNS] Total mice: " + totalMice + " - Final mouse indexes - P1: " + mouseIndex1 + ", P2: " + mouseIndex2);
@@ -2774,7 +2690,6 @@ namespace EmulatorLauncher
                 if (SystemConfig.isOptSet("use_guns") && guns.Any(g => g.Type == RawLighGunType.SindenLightgun))
                 {
                     Guns.StartSindenSoftware();
-                    _sindenSoft = true;
                 }
             }
 
