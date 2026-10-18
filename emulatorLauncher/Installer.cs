@@ -112,6 +112,7 @@ namespace EmulatorLauncher
             { new Installer("project64", "project64") },
             { new Installer("ps3", "rpcs3") },
             { new Installer("psxmame", "psxmame", "mame.exe") },
+            { new Installer("quiverlauncher", "quiverlauncher", "QuiverLauncher.exe") },
             { new Installer("raine") },
             { new Installer("raze", "raze", "raze.exe") },
             { new Installer("redream") },
@@ -848,6 +849,20 @@ namespace EmulatorLauncher
             return false;
         }
 
+        // Normalizes a Version so that undefined components (-1) are treated as 0.
+        // Prevents "8.3.0" from being considered lower than "8.3.0.0".
+        private static Version NormalizeVersion(Version v)
+        {
+            if (v == null)
+                return null;
+
+            return new Version(
+                Math.Max(v.Major, 0),
+                Math.Max(v.Minor, 0),
+                Math.Max(v.Build, 0),
+                Math.Max(v.Revision, 0));
+        }
+
         /// <summary>
         /// Check if RetroBat is up to date by comparing its version in the versions.xml with the local version.
         /// Assume it is up to date unless check returns false, to avoid blocking emulator updates if there is an issue with the version check.
@@ -874,7 +889,7 @@ namespace EmulatorLauncher
                 if (serverVersion == null)
                     return true;
 
-                Version local = GetRetroBatVersion();
+                Version local = NormalizeVersion(GetRetroBatVersion());
 
                 if (local == null)
                     return true;
@@ -882,6 +897,9 @@ namespace EmulatorLauncher
                 Version server;
                 if (!Version.TryParse(serverVersion.Version, out server))
                     return true;
+
+                server = NormalizeVersion(server);
+
 
                 if (local < server)
                 {
